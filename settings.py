@@ -918,16 +918,11 @@ def main():
 
     GUI = MainMenu(root)
 
-    GUI_SIZE_WIDTH = 460
-    GUI_SIZE_HEIGHT = 470
-    GUI_SIZE_MACOS = str(GUI_SIZE_WIDTH) + 'x' + str(GUI_SIZE_HEIGHT)
-    GUI_SIZE_WINDOWS=str(GUI_SIZE_WIDTH-60) + 'x' + str(GUI_SIZE_HEIGHT-20)
-
-    GUI_SIZE =GUI_SIZE_MACOS
-    import platform
-    if platform.system() == 'Windows':
-        GUI_SIZE =GUI_SIZE_WINDOWS
-    root.geometry(GUI_SIZE)
+    root.update_idletasks()
+    min_width = max(500, root.winfo_reqwidth() + 24)
+    min_height = max(540, root.winfo_reqheight() + 24)
+    root.minsize(min_width, min_height)
+    root.geometry("%dx%d" % (min_width, min_height))
     root.mainloop()
 
 if __name__ == "__main__":
