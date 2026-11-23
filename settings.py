@@ -73,6 +73,7 @@ def get_default_config():
             "auto_fill_ticket_price": "$1,500",
             "area_mode": CONST_RANDOM,
             "area_keyword": "",
+            "area_exclude_keyword": "",
             "answer_dictionary": "",
         },
     }
@@ -118,6 +119,7 @@ def btn_save_act(slience_mode=False):
         global chk_state_auto_fill_ticket_number
         global combo_kktix_area_mode
         global txt_kktix_area_keyword
+        global txt_kktix_area_exclude_keyword
         global txt_kktix_answer_dictionary
 
         global chk_state_date_auto_select
@@ -172,6 +174,7 @@ def btn_save_act(slience_mode=False):
             config_dict["kktix"]["auto_fill_ticket_number"] = bool(chk_state_auto_fill_ticket_number.get())
             config_dict["kktix"]["area_mode"] = combo_kktix_area_mode.get().strip()
             config_dict["kktix"]["area_keyword"] = txt_kktix_area_keyword.get().strip()
+            config_dict["kktix"]["area_exclude_keyword"] = txt_kktix_area_exclude_keyword.get().strip()
             config_dict["kktix"]["answer_dictionary"] = txt_kktix_answer_dictionary.get().strip()
 
             config_dict.setdefault("tixcraft", {})
@@ -388,6 +391,7 @@ def MainMenu(root):
 
     kktix_area_mode = ""
     kktix_area_keyword = ""
+    kktix_area_exclude_keyword = ""
     kktix_answer_dictionary = ""
 
     date_auto_select_enable = None
@@ -439,6 +443,12 @@ def MainMenu(root):
                 if kktix_area_keyword is None:
                     kktix_area_keyword = ""
                 kktix_area_keyword = kktix_area_keyword.strip()
+
+            if 'area_exclude_keyword' in config_dict["kktix"]:
+                kktix_area_exclude_keyword = config_dict["kktix"]["area_exclude_keyword"]
+                if kktix_area_exclude_keyword is None:
+                    kktix_area_exclude_keyword = ""
+                kktix_area_exclude_keyword = kktix_area_exclude_keyword.strip()
 
             if 'answer_dictionary' in config_dict["kktix"]:
                 kktix_answer_dictionary = config_dict["kktix"]["answer_dictionary"]
@@ -621,6 +631,17 @@ def MainMenu(root):
     txt_kktix_area_keyword_value = StringVar(frame_group_kktix, value=kktix_area_keyword)
     txt_kktix_area_keyword = Entry(frame_group_kktix, width=20, textvariable = txt_kktix_area_keyword_value)
     txt_kktix_area_keyword.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_kktix_area_exclude_keyword = Label(frame_group_kktix, text="Area Exclude Keyword")
+    lbl_kktix_area_exclude_keyword.grid(column=0, row=group_row_count, sticky = E)
+
+    global txt_kktix_area_exclude_keyword
+    global txt_kktix_area_exclude_keyword_value
+    txt_kktix_area_exclude_keyword_value = StringVar(frame_group_kktix, value=kktix_area_exclude_keyword)
+    txt_kktix_area_exclude_keyword = Entry(frame_group_kktix, width=20, textvariable = txt_kktix_area_exclude_keyword_value)
+    txt_kktix_area_exclude_keyword.grid(column=1, row=group_row_count, sticky = W)
 
     group_row_count+=1
 

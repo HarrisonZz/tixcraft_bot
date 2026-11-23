@@ -32,6 +32,7 @@ python3 -m unittest discover -s tests -v
 
 # scope & notes
 - This tool automates page navigation, date/area selection, ticket quantity selection, and agreement checkboxes based on `settings.json`.
+- **KKTIX**: supports automatic navigation from event pages (`/events/...`) to `/registrations/new`, comma-separated priority keywords in `kktix.area_keyword` (e.g. `VIP, $3800, $2800`), exclude keywords in `kktix.area_exclude_keyword` (e.g. `身障, 輪椅`), `+` button fallback, automatic refresh when tickets are not yet available, and pausing with input focus when human verification / CAPTCHA is present.
 - Account login, order confirmation, and payment remain manual in the browser window.
 - When `tixcraft.captcha_assist` is enabled, the app enlarges and shows the CAPTCHA image in a small Tk window. The user still reads and types the code, and the app only copies that code into `#TicketForm_verifyCode`; it never submits the order form.
 - When `tixcraft.captcha_auto_ocr` is enabled, the app first tries to recognize the code locally with `ddddocr` (offline, no API key) and fills it automatically; if recognition fails it falls back to the manual prompt when `captcha_assist` is also enabled.

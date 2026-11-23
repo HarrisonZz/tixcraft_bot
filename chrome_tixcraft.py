@@ -93,6 +93,7 @@ auto_press_confirm_button_enabled = False
 
 kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 kktix_area_keyword = ""
+kktix_area_exclude_keyword = ""
 
 kktix_answer_dictionary = ""
 kktix_answer_dictionary_list = None
@@ -106,7 +107,7 @@ def load_config(filepath=None):
     global area_auto_select_enable, area_auto_select_mode, area_keyword
     global captcha_assist_enabled, captcha_prompt_timeout_s, captcha_max_retries, captcha_auto_ocr_enabled
     global auto_press_confirm_button_enabled
-    global kktix_area_auto_select_mode, kktix_area_keyword
+    global kktix_area_auto_select_mode, kktix_area_keyword, kktix_area_exclude_keyword
     global kktix_answer_dictionary, kktix_answer_dictionary_list
 
     if filepath is not None:
@@ -143,6 +144,7 @@ def load_config(filepath=None):
     kktix_answer_dictionary = ""
     kktix_answer_dictionary_list = None
     kktix_area_keyword = ""
+    kktix_area_exclude_keyword = ""
     kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
     if 'kktix' in config_dict:
         auto_press_next_step_button = bool(config_dict["kktix"].get("auto_press_next_step_button", False))
@@ -158,6 +160,12 @@ def load_config(filepath=None):
             if kktix_area_keyword is None:
                 kktix_area_keyword = ""
             kktix_area_keyword = str(kktix_area_keyword).strip()
+
+        if 'area_exclude_keyword' in config_dict["kktix"]:
+            kktix_area_exclude_keyword = config_dict["kktix"]["area_exclude_keyword"]
+            if kktix_area_exclude_keyword is None:
+                kktix_area_exclude_keyword = ""
+            kktix_area_exclude_keyword = str(kktix_area_exclude_keyword).strip()
 
         if 'answer_dictionary' in config_dict["kktix"]:
             kktix_answer_dictionary = config_dict["kktix"]["answer_dictionary"]
@@ -228,6 +236,7 @@ def load_config(filepath=None):
     print("auto_press_next_step_button", auto_press_next_step_button)
     print("auto_fill_ticket_number", auto_fill_ticket_number)
     print("kktix_area_keyword", kktix_area_keyword)
+    print("kktix_area_exclude_keyword", kktix_area_exclude_keyword)
     print("kktix_answer_dictionary", kktix_answer_dictionary)
 
     # for tixcraft
@@ -1209,44 +1218,244 @@ def tixcraft_ticket_main(url, is_verifyCode_editing):
 
     return is_verifyCode_editing
 
+def _parse_keywords(keyword_str):
+    if not keyword_str:
+        return []
+    parts = re.split(r'[,，;；]+', str(keyword_str))
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _kktix_parse_positive_int(value):
+    try:
+        num = int(str(value).strip())
+        return num if num > 0 else 0
+    except Exception:
+        return 0
+
+
+def kktix_event_redirect(url):
+    parsed = urlparse(url)
+    path = parsed.path or ""
+    if "/events/" not in path or "/registrations" in path:
+        return False
+
+    selectors = (
+        'a.btn-point[href*="/registrations/new"]',
+        'a[href*="/registrations/new"]',
+        'a.btn-point[href*="registrations"]',
+    )
+    for selector in selectors:
+        try:
+            links = driver.find_elements(By.CSS_SELECTOR, selector)
+            for link in links:
+                if not link.is_displayed() or not link.is_enabled():
+                    continue
+                href = link.get_attribute("href")
+                try:
+                    link.click()
+                    return True
+                except Exception as exc:
+                    print("click kktix event buy link fail:", exc)
+                    if href:
+                        driver.get(href)
+                        return True
+        except Exception:
+            pass
+    return False
+
+
+def _kktix_get_row_quantity_input(row):
+    try:
+        inputs = row.find_elements(
+            By.CSS_SELECTOR,
+            'input[type="text"], input[type="number"], input:not([type])',
+        )
+        for inp in inputs:
+            inp_type = (inp.get_attribute("type") or "text").strip().lower()
+            if inp_type in ("hidden", "checkbox", "radio", "submit", "button"):
+                continue
+            return inp
+    except Exception:
+        pass
+    return None
+
+
+def _kktix_find_ticket_rows():
+    rows = []
+    for selector in ('.ticket-unit', '.display-table-row'):
+        try:
+            found = driver.find_elements(By.CSS_SELECTOR, selector)
+            if found:
+                rows = found
+                break
+        except Exception:
+            pass
+
+    available = []
+    for row in rows:
+        try:
+            if not row.is_enabled():
+                continue
+        except Exception:
+            continue
+
+        qty_input = _kktix_get_row_quantity_input(row)
+        if qty_input is None:
+            continue
+
+        try:
+            if not qty_input.is_enabled():
+                continue
+        except Exception:
+            continue
+
+        available.append((row, qty_input))
+    return available
+
+
+def _kktix_set_ticket_quantity(row, qty_input, target_qty):
+    current_val = _kktix_parse_positive_int(qty_input.get_attribute('value'))
+    if current_val > 0:
+        return True
+
+    target_int = _kktix_parse_positive_int(target_qty)
+    if target_int <= 0:
+        target_int = 1
+
+    candidates = [str(target_int)]
+    if target_int != 1:
+        candidates.append("1")
+
+    for qty_str in candidates:
+        # Strategy A: direct input + input/change events so AngularJS ng-model updates.
+        try:
+            qty_input.clear()
+            qty_input.send_keys(qty_str)
+            driver.execute_script(
+                "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                qty_input,
+            )
+            if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
+                return True
+        except Exception as exc:
+            print("assign ticket number via input fail:", exc)
+
+        # Strategy B: click plus button if direct typing did not update the value.
+        try:
+            plus_btn = row.find_element(By.CSS_SELECTOR, 'button.plus, .btn-default.plus, .plus')
+            if plus_btn is not None and plus_btn.is_enabled():
+                for _ in range(int(qty_str)):
+                    plus_btn.click()
+                if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
+def kktix_agree_terms():
+    checkbox = None
+    try:
+        checkbox = driver.find_element(By.ID, 'person_agree_terms')
+    except Exception:
+        # Some KKTIX forms do not have a separate terms checkbox.
+        return True
+
+    if checkbox is None:
+        return True
+
+    try:
+        if not checkbox.is_selected():
+            checkbox.click()
+    except Exception as exc:
+        print("click person_agree_terms fail:", exc)
+
+    try:
+        if not checkbox.is_selected():
+            driver.execute_script(
+                'var cb = document.getElementById("person_agree_terms");'
+                'if (cb && !cb.checked) {'
+                '  cb.checked = true;'
+                '  cb.dispatchEvent(new Event("click", {bubbles: true}));'
+                '  cb.dispatchEvent(new Event("change", {bubbles: true}));'
+                '}'
+            )
+        return checkbox.is_selected()
+    except Exception as exc:
+        print("javascript check person_agree_terms fail:", exc)
+        return False
+
+
+def kktix_has_human_verification():
+    custom_input = None
+    try:
+        captcha_divs = driver.find_elements(By.CSS_SELECTOR, '.custom-captcha-inner')
+        for div in captcha_divs:
+            if div.is_displayed():
+                try:
+                    custom_input = div.find_element(By.TAG_NAME, 'input')
+                except Exception:
+                    custom_input = None
+                return True, custom_input
+    except Exception:
+        pass
+
+    widget_selectors = (
+        '.g-recaptcha',
+        'iframe[src*="recaptcha"]',
+        '.h-captcha',
+        'iframe[src*="hcaptcha"]',
+        'iframe[src*="turnstile"]',
+        'input[name="cf-turnstile-response"]',
+    )
+    for selector in widget_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            for el in elements:
+                if el.is_displayed():
+                    return True, None
+        except Exception:
+            pass
+
+    return False, None
+
+
 def kktix_press_next_button():
     ret = False
 
     # let javascript to enable button.
     time.sleep(0.2)
 
-    try:
-        # method #1
-        #form_actions_div = None
-        #form_actions_div = driver.find_element(By.ID, 'registrationsNewApp')
-        #next_step_button = form_actions_div.find_element(By.CSS_SELECTOR, 'div.form-actions button.btn-primary')
+    selectors = (
+        '#registrationsNewApp div.form-actions button.btn-primary',
+        'div.form-actions button.btn-primary',
+        'button.btn-primary[ng-click*="challenge"]',
+        'button[type="submit"].btn-primary',
+    )
 
-        # method #2 wait
-        wait = WebDriverWait(driver, 1)
-        next_step_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#registrationsNewApp div.form-actions button.btn-primary')))
-        if not next_step_button is None:
-            if next_step_button.is_enabled():
-                next_step_button.click()
-                ret = True
-
-    except Exception as exc:
-        print("wait form-actions div wait to be clickable Exception:")
-        print(exc)
-        pass
-
-        # retry once
-        # method #1
-        try:        
-            next_step_button = driver.find_element(By.CSS_SELECTOR, '#registrationsNewApp div.form-actions button.btn-primary')
-            #next_step_button = form_actions_div.find_element(By.CSS_SELECTOR, 'div.form-actions button.btn-primary')
-            if not next_step_button is None:
-                if next_step_button.is_enabled():
+    for selector in selectors:
+        try:
+            wait = WebDriverWait(driver, 0.8)
+            next_step_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+            if next_step_button is not None and next_step_button.is_enabled():
+                if not next_step_button.get_attribute('disabled'):
                     next_step_button.click()
                     ret = True
-        except Exception as exc:
-            print("wait form-actions div retry clickable Exception:")
-            print(exc)
+                    break
+        except Exception:
+            try:
+                next_step_button = driver.find_element(By.CSS_SELECTOR, selector)
+                if next_step_button is not None and next_step_button.is_displayed() and next_step_button.is_enabled():
+                    if not next_step_button.get_attribute('disabled'):
+                        next_step_button.click()
+                        ret = True
+                        break
+            except Exception:
+                pass
     return ret
+
 
 def kktix_captcha_text_value(captcha_inner_div):
     ret = ""
@@ -1254,598 +1463,164 @@ def kktix_captcha_text_value(captcha_inner_div):
     if captcha_inner_div is not None:
         try:
             captcha_password_text = captcha_inner_div.find_element(By.TAG_NAME, "input")
-            if not captcha_password_text is None:
-                ret = captcha_password_text.get_attribute('value')
+            if captcha_password_text is not None:
+                ret = captcha_password_text.get_attribute('value') or ""
             else:
                 print("find captcha input field fail")
-        except Exception as exc:
+        except Exception:
             print("find captcha_inner_div Exception:")
-            #print(exc)
-            pass
-                
     return ret
 
-def kktix_input_captcha_text(captcha_inner_div, captcha_password_string, force_overwrite = False):
+
+def kktix_input_captcha_text(captcha_inner_div, captcha_password_string, force_overwrite=False):
     ret = False
 
     try:
-        if captcha_inner_div is not None:
-            #print("found captcha div")
-            if captcha_password_string is not None:
-                captcha_password_text = captcha_inner_div.find_element(By.TAG_NAME, "input")
-                if not captcha_password_text is None:
-                    #print("found input field")
-                    inputed_captcha_text = captcha_password_text.get_attribute('value')
+        if captcha_inner_div is not None and captcha_password_string is not None:
+            captcha_password_text = captcha_inner_div.find_element(By.TAG_NAME, "input")
+            if captcha_password_text is not None:
+                inputed_captcha_text = captcha_password_text.get_attribute('value') or ""
+                if force_overwrite or len(inputed_captcha_text) == 0:
                     if force_overwrite:
-                        captcha_password_text.send_keys(captcha_password_string)
-                        print("send captcha keys:" + captcha_password_string)
-                        ret = True
-                    else:
-                        # not force overwrite:
-                        if len(inputed_captcha_text) == 0:
-                            captcha_password_text.send_keys(captcha_password_string)
-                            print("send captcha keys:" + captcha_password_string)
-                            ret = True
-
-                else:
-                    print("find captcha input field fail")
-    except Exception as exc:
+                        captcha_password_text.clear()
+                    captcha_password_text.send_keys(captcha_password_string)
+                    print("send captcha keys:" + captcha_password_string)
+                    ret = True
+            else:
+                print("find captcha input field fail")
+    except Exception:
         print("find kktix_input_captcha_text Exception:")
-        #print(exc)
 
     return ret
+
 
 def kktix_assign_ticket_number():
-    ret = False
+    available_rows = _kktix_find_ticket_rows()
+    if not available_rows:
+        return False
 
-    areas = None
+    # If a quantity is already selected on any row, keep it.
+    for _, qty_input in available_rows:
+        try:
+            if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
+                return True
+        except Exception:
+            pass
 
-    ticket_price_list = None
+    exclude_keywords = _parse_keywords(kktix_area_exclude_keyword)
+    include_keywords = _parse_keywords(kktix_area_keyword)
 
-    is_ticket_number_assigened = False
+    filtered_rows = []
+    for row, qty_input in available_rows:
+        row_text = ""
+        try:
+            row_text = row.text or ""
+        except Exception:
+            continue
 
-    try:
-        ticket_price_list = driver.find_elements(By.CSS_SELECTOR, '.display-table-row')
-        if ticket_price_list is not None:
-            if len(ticket_price_list) > 0:
-                areas = []
+        if any(ex_kw in row_text for ex_kw in exclude_keywords):
+            continue
+        filtered_rows.append((row, qty_input, row_text))
 
-                row_index = 0
-                for row in ticket_price_list:
-                    row_index += 1
+    if not filtered_rows:
+        return False
 
-                    row_is_enabled=False
-                    try:
-                        row_is_enabled = row.is_enabled()
-                    except Exception as exc:
-                        pass
-
-                    if row_is_enabled:
-                        row_text = ""
-                        try:
-                            row_text = row.text
-                        except Exception as exc:
-                            print("get text fail")
-                            break
-
-                        if len(row_text) > 0:
-                            # check ticket input textbox.
-                            ticket_price_input = None
-                            try:
-                                ticket_price_input = row.find_element(By.TAG_NAME, 'input')
-                                if ticket_price_input is not None:
-                                    if ticket_price_input.is_enabled():
-                                        current_ticket_number = str(ticket_price_input.get_attribute('value'))
-                                        if len(current_ticket_number) > 0:
-                                            if current_ticket_number != "0":
-                                                is_ticket_number_assigened = True
-
-                                        if len(kktix_area_keyword) == 0:
-                                            areas.append(row)
-                                        else:
-                                            # match keyword.
-                                            if kktix_area_keyword in row_text:
-                                                areas.append(row)
-                            except Exception as exc:
-                                pass
-        else:
-            print("find ticket-price span fail")
-
-    except Exception as exc:
-        print("find ticket-price span Exception:")
-        print(exc)
-        pass
-
-    if is_ticket_number_assigened:
-        ret = True
+    candidates = []
+    if not include_keywords:
+        candidates = [(row, qty_input) for row, qty_input, _ in filtered_rows]
     else:
-        area = None
-        if areas is not None:
-            if len(areas) > 0:
-                target_row_index = 0
+        # Match keywords in priority order; pick the first tier that has available tickets.
+        for kw in include_keywords:
+            tier = [(row, qty_input) for row, qty_input, row_text in filtered_rows if kw in row_text]
+            if tier:
+                candidates = tier
+                break
 
-                if kktix_area_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
-                    pass
+    if not candidates:
+        return False
 
-                if kktix_area_auto_select_mode == CONST_FROM_BOTTOM_TO_TOP:
-                    target_row_index = len(areas)-1
+    target_row_index = _select_target_index(len(candidates), kktix_area_auto_select_mode)
+    if target_row_index < 0:
+        return False
 
-                if kktix_area_auto_select_mode == CONST_RANDOM:
-                    target_row_index = random.randint(0,len(areas)-1)
+    target_row, target_input = candidates[target_row_index]
+    return _kktix_set_ticket_quantity(target_row, target_input, ticket_number)
 
-                #print("target_row_index", target_row_index)
-                area = areas[target_row_index]
-
-        if area is not None:
-            try:
-                #print("area text", area.text)
-                ticket_price_input = None
-                try:
-                    ticket_price_input = area.find_element(By.TAG_NAME, 'input')
-                    if ticket_price_input is not None:
-                        if ticket_price_input.is_enabled():
-                            current_ticket_number = str(ticket_price_input.get_attribute('value'))
-                            if current_ticket_number == "0":
-                                try:
-                                    #print("asssign ticket number:" + str(ticket_number))
-                                    ticket_price_input.clear()
-                                    ticket_price_input.send_keys(ticket_number)
-                                    ret = True
-
-                                except Exception as exc:
-                                    print("asssign ticket number to ticket-price field Exception:")
-                                    print(exc)
-                                    ticket_price_input.clear()
-                                    ticket_price_input.send_keys("1")
-                                    ret = True
-                                    pass
-                            else:
-                                # assigned
-                                if str(ticket_number) == current_ticket_number:
-                                    ret = True
-                        else:
-                            print("find input, but not is enabled!")
-                    else:
-                        print("find input div fail!")
-
-                except Exception as exc:
-                    print("find input tag for price Exception")
-                    #print(exc)
-                    pass
-            
-            except Exception as exc:
-                print("auto fill ticket number fail")
-                print(exc)
-                pass
-
-    return ret
 
 def kktix_reg_new(url, answer_index):
     #---------------------------
-    # part 1: checkbox.
+    # part 1: check ticket availability & auto refresh
     #---------------------------
-    # check i agree (javascript)
-
-    # method #1
-    # use this method cuase "next button not able to enable"
-    '''
-    try:
-        #driver.execute_script("document.getElementById(\"person_agree_terms\").checked;")
-        driver.execute_script("$(\"#person_agree_terms\").prop('checked', true);")
-    except Exception as exc:
-        print("javascript check person_agree_terms fail")
-        print(exc)
-        pass
-    '''
-
-    # check is able to buy.
-    # auto refresh for area list page.
-    is_need_refresh = False
-    registrationsNewApp_div = None
-    el_list = None
-    try:
-        registrationsNewApp_div = driver.find_element(By.CSS_SELECTOR, '#registrationsNewApp > div')
-        if registrationsNewApp_div is not None:
-            el_list = registrationsNewApp_div.find_elements(By.TAG_NAME, "input")
-            if el_list is None:
-                is_need_refresh = True
-            else:
-                if len(el_list) == 0:
-                    is_need_refresh = True
-                else:
-                    is_all_input_hidden = True
-                    idx = 0
-                    for el in el_list:
-                        idx += 1
-                        if el.is_enabled():
-                            is_all_input_hidden = False
-                    if is_all_input_hidden:
-                        is_need_refresh = True
-    except Exception as exc:
-        pass
-        print("find input fail:", exc)
-
-    if is_need_refresh:
+    available_rows = _kktix_find_ticket_rows()
+    if not available_rows:
         try:
-            # this may cause fail!
-            driver.refresh()
-        except Exception as exc:
-            #print("refresh fail")
-            pass
-
-        return -1
-
-    # method #2
-    person_agree_terms_checkbox = None
-    try:
-        person_agree_terms_checkbox = driver.find_element(By.ID, 'person_agree_terms')
-        if person_agree_terms_checkbox is not None:
-            #print("find person_agree_terms checkbox")
-            if not person_agree_terms_checkbox.is_selected():
-                #print('send check to checkbox')
-                person_agree_terms_checkbox.click()
-            else:
-                #print('checked')
-                pass
-        else:
-            print("find person_agree_terms checkbox fail")
-    except Exception as exc:
-        print("find person_agree_terms checkbox Exception")
-        pass
-
+            app_div = driver.find_element(By.ID, 'registrationsNewApp')
+            if app_div is not None:
+                print("no available KKTIX ticket inputs yet, refreshing...")
+                time.sleep(0.3)
+                driver.refresh()
+                return -1
+        except Exception:
+            return -1
 
     #---------------------------
-    # part 2: ticket number
+    # part 2: agree terms checkbox
+    #---------------------------
+    kktix_agree_terms()
+
+    #---------------------------
+    # part 3: ticket number
     #---------------------------
     is_assign_ticket_number = False
     if auto_fill_ticket_number:
-        for retry_index in range(10):
+        for _ in range(3):
             is_assign_ticket_number = kktix_assign_ticket_number()
             if is_assign_ticket_number:
                 break
+            time.sleep(0.1)
 
-
-    #---------------------------
-    # part 3: captcha
-    #---------------------------
-    # is captcha div appear
-    is_captcha_appear = False
-    is_captcha_appear_and_filled_password = False
-
-    # try to auto answer options.
-    answer_list = None
-    is_need_keep_symbol = False
-    my_answer_delimitor = ""
-
-    captcha_inner_div = None
-    try:
-        captcha_inner_div = driver.find_element(By.CSS_SELECTOR, '.custom-captcha-inner')
-    except Exception as exc:
-        #print(exc)
-        #print("find captcha_inner_div fail")
-        pass
-
-    if captcha_inner_div is not None:
-        captcha_text_div = None
-        try:
-            captcha_text_div = captcha_inner_div.find_element(By.TAG_NAME, "p")
-        except Exception as exc:
-            pass
-            print("find p tag(captcha_text_div) fail")
-            print(exc)
-
-        captcha_password_string = None
-        if captcha_text_div is not None:
-            is_captcha_appear = True
-
+        # When area keyword(s) are set and none match yet, refresh to wait for release.
+        if not is_assign_ticket_number and len(_parse_keywords(kktix_area_keyword)) > 0:
+            print("(with keyword) no matching KKTIX ticket available, refreshing...")
             try:
-                captcha_text_div_text = captcha_text_div.text
-            except Exception as exc:
+                time.sleep(0.3)
+                driver.refresh()
+            except Exception:
                 pass
-            
-            #captcha_text_div_text = u"請回答下列問題,請在下方空格輸入DELIGHT（請以半形輸入法作答，大小寫需要一模一樣）"
-            #captcha_text_div_text = u"請在下方空白處輸入引號內文字：「abc」"
-            #captcha_text_div_text = u"請在下方空白處輸入引號內文字：「0118eveconcert」（請以半形小寫作答。）"
+            return -1
+    else:
+        # Check if user manually selected a ticket quantity.
+        for _, qty_input in available_rows:
+            try:
+                if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
+                    is_assign_ticket_number = True
+                    break
+            except Exception:
+                pass
 
-            # format text
-            keep_symbol_tmp = captcha_text_div_text
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'也',u'須')
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'必須',u'須')
+    #---------------------------
+    # part 4: human verification / CAPTCHA check (manual completion)
+    #---------------------------
+    has_verification, custom_input = kktix_has_human_verification()
+    if has_verification:
+        if custom_input is not None:
+            try:
+                current_val = custom_input.get_attribute('value') or ""
+                if len(current_val) == 0:
+                    driver.execute_script("arguments[0].focus();", custom_input)
+            except Exception:
+                pass
+        # Pause auto-submit so the user can complete verification manually in the browser.
+        return answer_index
 
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'全都',u'都')
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'全部都',u'都')
-
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'一致',u'相同')
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'一樣',u'相同')
-            keep_symbol_tmp = keep_symbol_tmp.replace(u'相等',u'相同')
-
-            if u'符號須都相同' in keep_symbol_tmp:
-                is_need_keep_symbol = True
-
-            if u'符號都相同' in keep_symbol_tmp:
-                is_need_keep_symbol = True
-
-            if u'符號須相同' in keep_symbol_tmp:
-                is_need_keep_symbol = True
-
-            # 請在下方空白處輸入引號內文字：
-            if captcha_password_string is None:
-                is_use_quota_message = False
-                if u"「" in captcha_text_div_text and u"」" in captcha_text_div_text:
-                    if u'下' in captcha_text_div_text and u'空' in captcha_text_div_text and u'輸入' in captcha_text_div_text and u'引號' in captcha_text_div_text and u'字' in captcha_text_div_text:
-                        is_use_quota_message = True
-                    if u'半形' in captcha_text_div_text and u'輸入' in captcha_text_div_text and u'引號' in captcha_text_div_text and u'字' in captcha_text_div_text:
-                        is_use_quota_message = True
-                #print("is_use_quota_message:" , is_use_quota_message)
-                if is_use_quota_message:
-                    captcha_password_string = find_between(captcha_text_div_text, u"「", u"」")
-                    #print("find captcha text:" , captcha_password_string)
-
-            if captcha_password_string is None:
-                is_use_quota_message = False
-                if u"【" in captcha_text_div_text and u"】" in captcha_text_div_text:
-                    if u'下' in captcha_text_div_text and u'空' in captcha_text_div_text and u'輸入' in captcha_text_div_text and u'引號' in captcha_text_div_text and u'字' in captcha_text_div_text:
-                        is_use_quota_message = True
-                    if u'半形' in captcha_text_div_text and u'輸入' in captcha_text_div_text and u'引號' in captcha_text_div_text and u'字' in captcha_text_div_text:
-                        is_use_quota_message = True
-                #print("is_use_quota_message:" , is_use_quota_message)
-                if is_use_quota_message:
-                    captcha_password_string = find_between(captcha_text_div_text, u"【", u"】")
-                    #print("find captcha text:" , captcha_password_string)
-
-
-            # 請回答下列問題,請在下方空格輸入DELIGHT（請以半形輸入法作答，大小寫需要一模一樣）
-            if captcha_password_string is None:
-                # clean stop word
-                tmp_text = captcha_text_div_text
-                tmp_text = tmp_text.replace(u'（',u'(')
-                tmp_text = tmp_text.replace(u'）',u')')
-                tmp_text = tmp_text.replace(u'：',u':')
-                tmp_text = tmp_text.replace(u'空白',u'空格')
-                tmp_text = tmp_text.replace(u'填入',u'輸入')
-
-                if u"空格" in tmp_text and u"輸入" in tmp_text:
-                    if not u"(" in tmp_text:
-                        tmp_text += u"("
-                    captcha_password_string = find_between(tmp_text, u"輸入", u"(")
-                    captcha_password_string = captcha_password_string.strip()
-                    captcha_password_string = captcha_password_string.replace(u'「',u'')
-                    captcha_password_string = captcha_password_string.replace(u'」',u'')
-                    captcha_password_string = captcha_password_string.replace(u'：',u'')
-                    captcha_password_string = captcha_password_string.replace(u'引號',u'')
-                    captcha_password_string = captcha_password_string.replace(u'內',u'')
-                    captcha_password_string = captcha_password_string.replace(u'文字',u'')
-
-            #captcha_text_div_text = "請問下列哪張專輯為林俊傑出道專輯?(1A)飛行者(2B)礫行者(3C)樂行者（請以半形輸入法作答，大小寫需要一模一樣，範例:1A）"
-            #captcha_text_div_text = "以下哪個「不是」正確的林俊傑與其他藝人合唱的歌曲組合？（選項為歌名/合作藝人 ，請以半形輸入法作答選項，大小寫需要一模一樣，範例:jju） 選項： (jjz)I am alive/Jason Mraz (jjy)友人說/張懷秋 (jjx)豆漿油條/A-Sa蔡卓妍 (jjw)黑暗騎士/五月天阿信 (jjv)手心的薔薇/G.E.M鄧紫棋"
-
-            # for test.
-            #captcha_password_string = None
-            #captcha_text_div_text = u"以下哪個「不是」正確的林俊傑與其他藝人合唱的歌曲組合？（選項為歌名/合作藝人 ，請以半形輸入法作答選項，大小寫需要一模一樣，範例:jju） 選項： (jja)小酒窩/A-Sa蔡卓妍 (jjb)被風吹過的夏天/金莎 (jjc)友人說/張懷秋 (jjd)全面開戰/五月天阿信 (jje)小說/阿杜, (0118eveconcert)0118eveconcert"
-            #captcha_text_div_text = u"以下哪個「不是」正確的林俊傑與其他藝人合唱的歌曲組合？（選項為歌名/合作藝人 ，請以半形輸入法作答選項，大小寫需要一模一樣，範例:jju） 選項： (jja)小酒窩/A-Sa蔡卓妍 (jjb)被風吹過的夏天/金莎 (jjc)友人說/張懷秋 (jjd)全面開戰/五月天阿信 (jje)小說/阿杜"
-            #captcha_text_div_text = u"以下哪個「不是」正確的林俊傑與其他藝人合唱的歌曲組合？（選項為歌名/合作藝人 ，請以半形輸入法作答選項，大小寫需要一模一樣，範例:jju） 選項： (jja)小酒窩/A-Sa蔡卓妍 (jjb)被風吹過的夏天/金莎 (jjc)友人說/張懷秋 (jjd)全面開戰/五月天阿信 (jje)小說/阿杜"
-            #captcha_text_div_text = u"請問《龍的傳人2060》演唱會是以下哪位藝人的演出？（請以半形輸入法作答，大小寫需要一模一樣，範例：B2）A1.周杰倫 B2.林俊傑 C3.張學友 D4.王力宏 4:4"
-
-            # parse '演出日期'
-            is_need_parse_web_datetime = False
-            if u'半形數字' in captcha_text_div_text:
-                if u'演出日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'活動日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'表演日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'開始日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'演唱會日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'展覽日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'音樂會日期' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-                if u'the date of the show you purchased' in captcha_text_div_text:
-                    is_need_parse_web_datetime = True
-
-            #print("is_need_parse_web_datetime:", is_need_parse_web_datetime)
-            if is_need_parse_web_datetime:
-                # get web datetime.
-                # ...
-                el_web_datetime = None
-                is_found_web_datetime = False
-                web_datetime = None
-                try:
-                    if not registrationsNewApp_div is None:
-                        el_web_datetime_list = registrationsNewApp_div.find_elements(By.TAG_NAME, 'td')
-                        if el_web_datetime_list is not None:
-                            el_web_datetime_list_count = len(el_web_datetime_list)
-                            if el_web_datetime_list_count > 0:
-                                for el_web_datetime in el_web_datetime_list:
-                                    try:
-                                        el_web_datetime_text = el_web_datetime.text
-                                        #print("el_web_datetime_text:", el_web_datetime_text)
-                                        
-                                        now = datetime.now()
-                                        #print("now:", now)
-                                        for guess_year in range(now.year,now.year+3):
-                                            current_year = str(guess_year)            
-                                            if current_year in el_web_datetime_text:
-                                                if u'/' in el_web_datetime_text:
-                                                    web_datetime = el_web_datetime_text
-                                                    is_found_web_datetime = True
-                                                    break
-
-                                        if is_found_web_datetime:
-                                            break
-                                    except Exception as exc:
-                                        #print(exc)
-                                        pass
-                        else:
-                            print("find td.ng-binding fail")
-                except Exception as exc:
-                    #print("find td.ng-binding Exception")
-                    pass
-                #print("is_found_web_datetime", is_found_web_datetime)
-
-                captcha_password_string = None
-                if not web_datetime is None:
-                    tmp_text = captcha_text_div_text
-                    # replace ex.
-                    tmp_text = tmp_text.replace(u'例如',u'範例')
-                    tmp_text = tmp_text.replace(u'如:',u'範例:')
-                    tmp_text = tmp_text.replace(u'舉例',u'範例')
-                    if not u'範例' in tmp_text:
-                        tmp_text = tmp_text.replace(u'例',u'範例')
-                    # important, maybe 例 & ex occurs at same time.
-                    tmp_text = tmp_text.replace(u'ex:',u'範例:')
-
-                    tmp_text = tmp_text.replace(u'輸入：',u'範例')
-                    tmp_text = tmp_text.replace(u'輸入',u'範例')
-                    #print("tmp_text", tmp_text)
-
-                    my_datetime_foramted = None
-
-                    if my_datetime_foramted is None:
-                        if u'4位半形數字' in tmp_text:
-                            my_datetime_foramted = "%m%d"
-
-                    if my_datetime_foramted is None:
-                        now = datetime.now()
-                        for guess_year in range(now.year-1,now.year+3):
-                            current_year = str(guess_year)            
-                            if current_year in tmp_text:
-                                my_hint_index = tmp_text.find(current_year)
-                                my_hint_anwser = tmp_text[my_hint_index:]
-                                #print("my_hint_anwser:", my_hint_anwser)
-                                # get after.
-                                my_delimitor_symbol = u'範例'
-                                if my_delimitor_symbol in my_hint_anwser:
-                                    my_delimitor_index = my_hint_anwser.find(my_delimitor_symbol)
-                                    my_hint_anwser = my_hint_anwser[my_delimitor_index+len(my_delimitor_symbol):]
-                                #print("my_hint_anwser:", my_hint_anwser)
-                                # get before.
-                                my_delimitor_symbol = u'，'
-                                if my_delimitor_symbol in my_hint_anwser:
-                                    my_delimitor_index = my_hint_anwser.find(my_delimitor_symbol)
-                                    my_hint_anwser = my_hint_anwser[:my_delimitor_index]
-                                my_delimitor_symbol = u'。'
-                                if my_delimitor_symbol in my_hint_anwser:
-                                    my_delimitor_index = my_hint_anwser.find(my_delimitor_symbol)
-                                    my_hint_anwser = my_hint_anwser[:my_delimitor_index]
-                                # PS: space may not is delimitor...
-                                my_delimitor_symbol = u' '
-                                if my_delimitor_symbol in my_hint_anwser:
-                                    my_delimitor_index = my_hint_anwser.find(my_delimitor_symbol)
-                                    my_hint_anwser = my_hint_anwser[:my_delimitor_index]
-                                my_anwser_formated = convert_string_to_pattern(my_hint_anwser, dynamic_length=False)
-                                #print("my_hint_anwser:", my_hint_anwser)
-                                #print(u"my_anwser_formated:", my_anwser_formated)
-                                if my_anwser_formated == u"[\\d][\\d][\\d][\\d][\\d][\\d][\\d][\\d]":
-                                    my_datetime_foramted = "%Y%m%d"
-                                if my_anwser_formated == u"[\\d][\\d][\\d][\\d]/[\\d][\\d]/[\\d][\\d]":
-                                    my_datetime_foramted = "%Y/%m/%d"
-                                break
-
-                    if not my_datetime_foramted is None:
-                        my_delimitor_symbol = u' '
-                        if my_delimitor_symbol in web_datetime:
-                            web_datetime = web_datetime[:web_datetime.find(my_delimitor_symbol)]
-                        date_time = datetime.strptime(web_datetime,u"%Y/%m/%d")
-                        #print("date_time:", date_time)
-                        ans = None
-                        try:
-                            ans = date_time.strftime(my_datetime_foramted)
-                        except Exception as exc:
-                            pass
-                        captcha_password_string = ans
-                        #print(u"my_anwser:", ans)
-
-            # name of event.
-            if captcha_password_string is None:
-                if u"name of event" in tmp_text:
-                    if u'(' in tmp_text and u')' in tmp_text and u'ans:' in tmp_text.lower():
-                        target_symbol = u"("
-                        star_index = tmp_text.find(target_symbol)
-                        target_symbol = u":"
-                        star_index = tmp_text.find(target_symbol, star_index)
-                        target_symbol = u")"
-                        end_index = tmp_text.find(target_symbol, star_index)
-                        captcha_password_string = tmp_text[star_index+1:end_index]
-                        #print("captcha_password_string:", captcha_password_string)
-
-
-            #print("captcha_password_string:", captcha_password_string)
-            # ask question.
-            if captcha_password_string is None:
-                answer_list, my_answer_delimitor = get_answer_list_by_question(captcha_text_div_text)
-
-            # final run.
-            if captcha_password_string is not None:
-                # password is not None, try to send.
-                if kktix_input_captcha_text(captcha_inner_div, captcha_password_string):
-                    is_captcha_appear_and_filled_password = True
-
-    if auto_press_next_step_button:
-        # pass switch check.
-        
-        #print("is_assign_ticket_number", is_assign_ticket_number)
-        if is_assign_ticket_number:
-            # must input the ticket number correct.
-            #print("is_captcha_appear:", is_captcha_appear)
-            #print("is_captcha_appear_and_filled_password:", is_captcha_appear_and_filled_password)
-
-            if not is_captcha_appear:
-                # without captcha.
-                # normal mode.
-                #print("# normal mode.")
-                kktix_press_next_button()
-            else:
-                if is_captcha_appear_and_filled_password:
-                    # for easy guest mode, we can fill the password correct.
-                    #print("for easy guest mode, we can fill the password correct.")
-                    kktix_press_next_button()
-                else:
-                    # not is easy guest mode.
-                    #print("# not is easy guest mode.")
-
-                    # password force brute
-                    if answer_list is None:
-                        if not kktix_answer_dictionary_list is None:
-                            if len(kktix_answer_dictionary_list) > 0:
-                                answer_list = kktix_answer_dictionary_list
-
-                    # remove duplicate list
-                    if not answer_list is None:
-                        if len(answer_list) > 1:
-                            unique = [x for i, x in enumerate(answer_list) if answer_list.index(x) == i]
-                            answer_list = unique
-                    
-                    # start to try
-                    if not answer_list is None:
-                        # for popular event
-                        if len(answer_list) > 0:
-                            if answer_index < len(answer_list)-1:
-                                if kktix_captcha_text_value(captcha_inner_div) == "":
-                                    answer_index += 1
-                                    answer = answer_list[answer_index]
-
-                                    if len(my_answer_delimitor) > 0:
-                                        if answer[-1:] == my_answer_delimitor:
-                                            answer = answer[:-1]
-
-                                    if len(answer) > 0:
-                                        print("send ans:" + answer)
-                                        captcha_password_string = answer
-                                        if kktix_input_captcha_text(captcha_inner_div, captcha_password_string):
-                                            kktix_press_next_button()
-                            else:
-                                # exceed index, do nothing.
-                                pass
-                    else:
-                        # captcha appear but we do no have answer list.
-                        pass      
-
+    #---------------------------
+    # part 5: press next step button
+    #---------------------------
+    if auto_press_next_step_button and is_assign_ticket_number:
+        kktix_press_next_button()
 
     return answer_index
+
 
 def fami_date_auto_select(url):
     date_list = None
@@ -2861,6 +2636,8 @@ def main():
                     answer_index = kktix_reg_new(url, answer_index)
                 else:
                     answer_index = -1
+                    if '/events/' in url and '/registrations' not in url:
+                        kktix_event_redirect(url)
 
             # for famiticket
             if 'famiticket.com' in url:

@@ -30,6 +30,7 @@
     "auto_fill_ticket_price": "$1,500",
     "area_mode": "random",
     "area_keyword": "",
+    "area_exclude_keyword": "",
     "answer_dictionary": ""
   }
 }

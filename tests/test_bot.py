@@ -209,6 +209,115 @@ class MockTicketingHandler(http.server.BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/events/demo-concert":
+            self._send_html(
+                """
+                <html><body>
+                  <h1>Demo Concert</h1>
+                  <a class="btn-point" href="/events/demo-concert/registrations/new">下一步</a>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/demo-concert/registrations/new":
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div>
+                      <div class="ticket-unit display-table-row">
+                        <span>VIP 身障區 $3800</span>
+                        <input id="qty_vip_disabled" type="text" value="0" />
+                      </div>
+                      <div class="ticket-unit display-table-row">
+                        <span>VIP 搖滾區 $3800</span>
+                        <input id="qty_vip" type="text" value="0" oninput="window._inputFired = true;" onchange="window._changeFired = true; document.getElementById('next_btn').disabled = false;" />
+                      </div>
+                      <div class="ticket-unit display-table-row">
+                        <span>看台區 $2800</span>
+                        <input id="qty_stand" type="text" value="0" onchange="document.getElementById('next_btn').disabled = false;" />
+                      </div>
+                      <input type="checkbox" id="person_agree_terms" />
+                      <div class="form-actions">
+                        <button id="next_btn" class="btn-primary" disabled onclick="window.location='/events/demo-concert/registrations/confirm'">下一步</button>
+                      </div>
+                    </div>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/demo-concert/registrations/confirm":
+            self._send_html("<html><body><h1>Confirm Order</h1></body></html>")
+            return
+
+        if path == "/events/kktix-soldout/registrations/new":
+            MockTicketingHandler.refresh_hits += 1
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div>
+                      <div class="ticket-unit display-table-row">
+                        <span>VIP $3800 已售完</span>
+                      </div>
+                      <input type="checkbox" id="person_agree_terms" />
+                    </div>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/kktix-plus/registrations/new":
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div>
+                      <div class="ticket-unit display-table-row">
+                        <span>搖滾區 $2800</span>
+                        <input id="qty_plus" type="text" value="0" readonly />
+                        <button type="button" class="btn-default plus" onclick="var el=document.getElementById('qty_plus'); el.value = String(parseInt(el.value || '0', 10) + 1);">+</button>
+                      </div>
+                      <input type="checkbox" id="person_agree_terms" />
+                      <div class="form-actions">
+                        <button id="next_btn" class="btn-primary" onclick="document.body.setAttribute('data-next','clicked')">下一步</button>
+                      </div>
+                    </div>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/kktix-verify/registrations/new":
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div>
+                      <div class="ticket-unit display-table-row">
+                        <span>一般票 $1800</span>
+                        <input id="qty_verify" type="text" value="0" />
+                      </div>
+                      <input type="checkbox" id="person_agree_terms" />
+                      <div class="custom-captcha-inner">
+                        <p>請輸入主辦方指定問題答案</p>
+                        <input id="custom_captcha_input" type="text" value="" />
+                      </div>
+                      <div class="form-actions">
+                        <button id="next_btn" class="btn-primary" onclick="document.body.setAttribute('data-next','clicked')">下一步</button>
+                      </div>
+                    </div>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
         self.send_response(404)
         self.end_headers()
 
@@ -278,6 +387,10 @@ class UnitTests(unittest.TestCase):
             self.assertTrue(bot.tixcraft_press_confirm_button())
 
         fake_button.click.assert_called_once()
+
+    def test_parse_keywords(self):
+        self.assertEqual(bot._parse_keywords(""), [])
+        self.assertEqual(bot._parse_keywords("VIP, $3800， $2800; A區"), ["VIP", "$3800", "$2800", "A區"])
 
 
 class SeleniumIntegrationTests(unittest.TestCase):
@@ -419,6 +532,82 @@ class SeleniumIntegrationTests(unittest.TestCase):
             'return document.querySelector("input[name=cl]:checked").value;'
         )
         self.assertEqual(selected, "2")
+
+    def test_kktix_event_redirect(self):
+        self.driver.get(f"{self.base_url}/events/demo-concert")
+        self.assertTrue(bot.kktix_event_redirect(self.driver.current_url))
+        self.assertTrue(self.driver.current_url.endswith("/events/demo-concert/registrations/new"))
+
+    def test_kktix_priority_keyword_exclude_and_next_step(self):
+        bot.ticket_number = "2"
+        bot.auto_fill_ticket_number = True
+        bot.auto_press_next_step_button = True
+        bot.kktix_area_auto_select_mode = bot.CONST_FROM_TOP_TO_BOTTOM
+        bot.kktix_area_keyword = "不存在區, VIP, $2800"
+        bot.kktix_area_exclude_keyword = "身障, 輪椅"
+
+        self.driver.get(f"{self.base_url}/events/demo-concert/registrations/new")
+        bot.kktix_reg_new(self.driver.current_url, -1)
+
+        # Should exclude "VIP 身障區", select "VIP 搖滾區", agree terms, and click Next Step.
+        self.assertTrue(self.driver.current_url.endswith("/events/demo-concert/registrations/confirm"))
+
+    def test_kktix_soldout_refreshes_even_with_terms_checkbox(self):
+        MockTicketingHandler.refresh_hits = 0
+        bot.kktix_area_keyword = ""
+        bot.kktix_area_exclude_keyword = ""
+        self.driver.get(f"{self.base_url}/events/kktix-soldout/registrations/new")
+        hits_before = MockTicketingHandler.refresh_hits
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertGreater(MockTicketingHandler.refresh_hits, hits_before)
+
+    def test_kktix_plus_button_fallback(self):
+        bot.ticket_number = "2"
+        bot.auto_fill_ticket_number = True
+        bot.auto_press_next_step_button = True
+        bot.kktix_area_keyword = ""
+        bot.kktix_area_exclude_keyword = ""
+
+        self.driver.get(f"{self.base_url}/events/kktix-plus/registrations/new")
+        bot.kktix_reg_new(self.driver.current_url, -1)
+
+        self.assertEqual(
+            self.driver.execute_script('return document.getElementById("qty_plus").value;'),
+            "2",
+        )
+        self.assertTrue(
+            self.driver.execute_script('return document.getElementById("person_agree_terms").checked;')
+        )
+        self.assertEqual(
+            self.driver.execute_script("return document.body.getAttribute('data-next');"),
+            "clicked",
+        )
+
+    def test_kktix_pauses_and_focuses_on_human_verification(self):
+        bot.ticket_number = "2"
+        bot.auto_fill_ticket_number = True
+        bot.auto_press_next_step_button = True
+        bot.kktix_area_keyword = ""
+        bot.kktix_area_exclude_keyword = ""
+
+        self.driver.get(f"{self.base_url}/events/kktix-verify/registrations/new")
+        bot.kktix_reg_new(self.driver.current_url, -1)
+
+        # Ticket quantity and terms are filled, verification input is focused, and Next Step is NOT auto-clicked.
+        self.assertEqual(
+            self.driver.execute_script('return document.getElementById("qty_verify").value;'),
+            "2",
+        )
+        self.assertTrue(
+            self.driver.execute_script('return document.getElementById("person_agree_terms").checked;')
+        )
+        self.assertEqual(
+            self.driver.execute_script("return document.activeElement.id;"),
+            "custom_captcha_input",
+        )
+        self.assertIsNone(
+            self.driver.execute_script("return document.body.getAttribute('data-next');")
+        )
 
 
 if __name__ == "__main__":
