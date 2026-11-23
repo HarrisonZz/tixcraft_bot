@@ -318,6 +318,16 @@ class MockTicketingHandler(http.server.BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/cf-challenge":
+            self._send_html(
+                """
+                <html><head><title>Just a moment...</title></head><body>
+                  <div id="challenge-running">Checking if the site connection is secure</div>
+                </body></html>
+                """
+            )
+            return
+
         self.send_response(404)
         self.end_headers()
 
@@ -391,6 +401,26 @@ class UnitTests(unittest.TestCase):
     def test_parse_keywords(self):
         self.assertEqual(bot._parse_keywords(""), [])
         self.assertEqual(bot._parse_keywords("VIP, $3800， $2800; A區"), ["VIP", "$3800", "$2800", "A區"])
+
+    def test_pause_resume_state_shared_between_settings_and_bot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pause_file = os.path.join(tmpdir, ".bot_paused")
+            self.assertFalse(settings.is_bot_paused(pause_file))
+            self.assertFalse(bot.is_bot_paused(pause_file))
+
+            # Toggle via settings -> visible to chrome_tixcraft
+            self.assertTrue(settings.toggle_bot_paused(pause_file))
+            self.assertTrue(bot.is_bot_paused(pause_file))
+
+            # Toggle again -> resumed
+            self.assertFalse(settings.toggle_bot_paused(pause_file))
+            self.assertFalse(bot.is_bot_paused(pause_file))
+
+            # Explicit set/clear
+            bot.set_bot_paused(True, pause_file)
+            self.assertTrue(settings.is_bot_paused(pause_file))
+            settings.set_bot_paused(False, pause_file)
+            self.assertFalse(bot.is_bot_paused(pause_file))
 
 
 class SeleniumIntegrationTests(unittest.TestCase):
@@ -608,6 +638,13 @@ class SeleniumIntegrationTests(unittest.TestCase):
         self.assertIsNone(
             self.driver.execute_script("return document.body.getAttribute('data-next');")
         )
+
+    def test_cloudflare_challenge_detection(self):
+        self.driver.get(f"{self.base_url}/cf-challenge")
+        self.assertTrue(bot.is_cloudflare_challenge_page(self.driver.current_url))
+
+        self.driver.get(f"{self.base_url}/events/demo-concert")
+        self.assertFalse(bot.is_cloudflare_challenge_page(self.driver.current_url))
 
 
 if __name__ == "__main__":

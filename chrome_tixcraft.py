@@ -2484,6 +2484,72 @@ def _is_driver_closed_error(exc):
     return any(marker in msg for marker in closed_markers)
 
 
+def get_pause_file_path():
+    return os.path.join(get_app_root(), '.bot_paused')
+
+
+def is_bot_paused(pause_file=None):
+    path = pause_file if pause_file is not None else get_pause_file_path()
+    return os.path.isfile(path)
+
+
+def set_bot_paused(paused, pause_file=None):
+    path = pause_file if pause_file is not None else get_pause_file_path()
+    if paused:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('paused\n')
+        return True
+    if os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return False
+
+
+def toggle_bot_paused(pause_file=None):
+    return set_bot_paused(not is_bot_paused(pause_file), pause_file)
+
+
+def is_cloudflare_challenge_page(url=None):
+    if url and '/cdn-cgi/challenge-platform' in url:
+        return True
+
+    if driver is None:
+        return False
+
+    try:
+        title = (driver.title or '').strip().lower()
+        cf_titles = (
+            'just a moment',
+            'attention required! | cloudflare',
+            'checking your browser',
+            '請稍候',
+        )
+        if any(marker in title for marker in cf_titles):
+            return True
+    except Exception:
+        pass
+
+    cf_selectors = (
+        '#challenge-form',
+        '#challenge-running',
+        '#cf-challenge-running',
+        '.cf-turnstile',
+        'iframe[src*="challenges.cloudflare.com"]',
+    )
+    for selector in cf_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            for el in elements:
+                if el.is_displayed():
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
 def main():
     global driver
 
@@ -2504,10 +2570,22 @@ def main():
     is_verifyCode_editing = False
     # for kktix
     answer_index = -1
+    was_paused = False
+    was_cf_paused = False
 
     try:
         while True:
             time.sleep(0.1)
+
+            if is_bot_paused():
+                if not was_paused:
+                    print("Bot paused (manual control). Click Resume to continue.")
+                    was_paused = True
+                time.sleep(0.2)
+                continue
+            elif was_paused:
+                print("Bot resumed.")
+                was_paused = False
 
             is_alert_popup = False
 
@@ -2600,6 +2678,16 @@ def main():
             if url != last_url:
                 print(url)
             last_url = url
+
+            if is_cloudflare_challenge_page(url):
+                if not was_cf_paused:
+                    print("Cloudflare verification detected; pausing automation for manual completion...")
+                    was_cf_paused = True
+                time.sleep(0.5)
+                continue
+            elif was_cf_paused:
+                print("Cloudflare verification cleared; resuming automation.")
+                was_cf_paused = False
 
             if 'tixcraft.com' in url:
                 if '/ticket/order' in url:

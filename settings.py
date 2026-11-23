@@ -215,8 +215,53 @@ def btn_save_act(slience_mode=False):
     return is_all_data_correct
 
 
+def get_pause_file_path():
+    return os.path.join(get_app_root(), '.bot_paused')
+
+
+def is_bot_paused(pause_file=None):
+    path = pause_file if pause_file is not None else get_pause_file_path()
+    return os.path.isfile(path)
+
+
+def set_bot_paused(paused, pause_file=None):
+    path = pause_file if pause_file is not None else get_pause_file_path()
+    if paused:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('paused\n')
+        return True
+    if os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return False
+
+
+def toggle_bot_paused(pause_file=None):
+    return set_bot_paused(not is_bot_paused(pause_file), pause_file)
+
+
+def update_pause_ui(paused=None):
+    if paused is None:
+        paused = is_bot_paused()
+    if 'btn_pause' in globals() and btn_pause is not None:
+        btn_pause.config(text="Resume" if paused else "Pause")
+    if 'lbl_bot_status' in globals() and lbl_bot_status is not None:
+        lbl_bot_status.config(
+            text="Status: Paused (manual control)" if paused else "Status: Running"
+        )
+
+
+def btn_pause_clicked():
+    paused = toggle_bot_paused()
+    update_pause_ui(paused)
+
+
 def btn_run_clicked():
     if btn_save_act(slience_mode=True):
+        set_bot_paused(False)
+        update_pause_ui(False)
         app_root = get_app_root()
         if hasattr(sys, 'frozen'):
             # check platform here.
@@ -230,6 +275,7 @@ def btn_run_clicked():
 
 
 def btn_exit_clicked():
+    set_bot_paused(False)
     root.destroy()
 
 def callbackHomepageOnChange(event):
@@ -832,14 +878,25 @@ def MainMenu(root):
     btn_run = ttk.Button(frame_action, text="Run", command=btn_run_clicked)
     btn_run.grid(column=0, row=0)
 
+    global btn_pause
+    btn_pause = ttk.Button(frame_action, text="Pause", command=btn_pause_clicked)
+    btn_pause.grid(column=1, row=0)
+
     btn_save = ttk.Button(frame_action, text="Save", command=btn_save_clicked)
-    btn_save.grid(column=1, row=0)
+    btn_save.grid(column=2, row=0)
 
     btn_exit = ttk.Button(frame_action, text="Exit", command=btn_exit_clicked)
-    btn_exit.grid(column=2, row=0)
+    btn_exit.grid(column=3, row=0)
 
     frame_action.grid(column=0, row=row_count, sticky = W, padx=UI_PADDING_X)
 
+    row_count+=1
+
+    global lbl_bot_status
+    lbl_bot_status = Label(root, text="Status: Running")
+    lbl_bot_status.grid(column=0, row=row_count, sticky = W, padx=UI_PADDING_X, pady=4)
+
+    update_pause_ui()
     showHideBlocks(all_layout_visible=True)
 
 
@@ -861,8 +918,8 @@ def main():
 
     GUI = MainMenu(root)
 
-    GUI_SIZE_WIDTH = 420
-    GUI_SIZE_HEIGHT = 430
+    GUI_SIZE_WIDTH = 460
+    GUI_SIZE_HEIGHT = 470
     GUI_SIZE_MACOS = str(GUI_SIZE_WIDTH) + 'x' + str(GUI_SIZE_HEIGHT)
     GUI_SIZE_WINDOWS=str(GUI_SIZE_WIDTH-60) + 'x' + str(GUI_SIZE_HEIGHT-20)
 
