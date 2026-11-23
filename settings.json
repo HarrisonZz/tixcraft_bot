@@ -1,5 +1,5 @@
 {
-  "homepage": "https://tixcraft.com",
+  "homepage": "https://kktix.com",
   "homepage1": "https://kktix.com",
   "homepage2": "https://tixcraft.com",
   "browser": "chrome",
@@ -29,7 +29,7 @@
     "auto_press_next_step_button": true,
     "auto_fill_ticket_number": true,
     "auto_fill_ticket_price": "$1,500",
-    "area_mode": "random",
+    "area_mode": "from top to bottom",
     "area_keyword": "",
     "area_exclude_keyword": "",
     "answer_dictionary": ""
