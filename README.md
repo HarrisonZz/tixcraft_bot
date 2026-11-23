@@ -32,7 +32,13 @@ python3 -m unittest discover -s tests -v
 
 # scope & notes
 - This tool automates page navigation, date/area selection, ticket quantity selection, and agreement checkboxes based on `settings.json`.
-- Account login, human verification / CAPTCHA entry (`#TicketForm_verifyCode`), and order payment remain manual in the browser window.
+- Account login, order confirmation, and payment remain manual in the browser window.
+- When `tixcraft.captcha_assist` is enabled, the app enlarges and shows the CAPTCHA image in a small Tk window. The user still reads and types the code, and the app only copies that code into `#TicketForm_verifyCode`; it never submits the order form.
+- CAPTCHA assist settings:
+  - `captcha_assist`: opt in to the prompt (default: `false`).
+  - `captcha_prompt_timeout_s`: seconds before each prompt closes (default: `60`).
+  - `captcha_max_retries`: maximum capture/prompt/fill attempts (default: `3`).
+- The graphical prompt requires Tkinter and Pillow. If Tk is unavailable, the app temporarily saves the image and prompts in the terminal with the same timeout.
 
 # implement introduce
 https://stackoverflow.max-everyday.com/2018/03/selenium-chrome-webdriver/

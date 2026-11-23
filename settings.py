@@ -61,6 +61,9 @@ def get_default_config():
                 "mode": CONST_RANDOM,
                 "area_keyword": "",
             },
+            "captcha_assist": False,
+            "captcha_prompt_timeout_s": 60,
+            "captcha_max_retries": 3,
         },
         "kktix": {
             "auto_press_next_step_button": True,
@@ -119,6 +122,9 @@ def btn_save_act(slience_mode=False):
         global txt_date_keyword
         global chk_state_area_auto_select
         global txt_area_keyword
+        global chk_state_captcha_assist
+        global txt_captcha_prompt_timeout_s
+        global txt_captcha_max_retries
 
         global combo_date_auto_select_mode
         global combo_area_auto_select_mode
@@ -176,6 +182,18 @@ def btn_save_act(slience_mode=False):
 
             config_dict["tixcraft"]["date_auto_select"]["mode"] = combo_date_auto_select_mode.get().strip()
             config_dict["tixcraft"]["area_auto_select"]["mode"] = combo_area_auto_select_mode.get().strip()
+
+            try:
+                prompt_timeout_s = int(txt_captcha_prompt_timeout_s.get().strip())
+                max_retries = int(txt_captcha_max_retries.get().strip())
+                if prompt_timeout_s <= 0 or max_retries <= 0:
+                    raise ValueError("CAPTCHA values must be positive")
+                config_dict["tixcraft"]["captcha_assist"] = bool(chk_state_captcha_assist.get())
+                config_dict["tixcraft"]["captcha_prompt_timeout_s"] = prompt_timeout_s
+                config_dict["tixcraft"]["captcha_max_retries"] = max_retries
+            except ValueError:
+                is_all_data_correct = False
+                messagebox.showerror("Error", "CAPTCHA timeout and retries must be positive integers")
 
         # save config.
         if is_all_data_correct:
@@ -374,6 +392,10 @@ def MainMenu(root):
     area_auto_select_mode = ""
     area_keyword = ""
 
+    captcha_assist = False
+    captcha_prompt_timeout_s = 60
+    captcha_max_retries = 3
+
     global config_dict
     if not config_dict is None:
         # read config.
@@ -437,6 +459,10 @@ def MainMenu(root):
             if 'area_keyword' in config_dict["tixcraft"]["area_auto_select"]:
                 area_keyword = config_dict["tixcraft"]["area_auto_select"]["area_keyword"]
                 area_keyword = area_keyword.strip()
+
+            captcha_assist = bool(config_dict["tixcraft"].get("captcha_assist", False))
+            captcha_prompt_timeout_s = config_dict["tixcraft"].get("captcha_prompt_timeout_s", 60)
+            captcha_max_retries = config_dict["tixcraft"].get("captcha_max_retries", 3)
 
         # output config:
         print("homepage", homepage)
@@ -704,6 +730,39 @@ def MainMenu(root):
     txt_area_keyword = Entry(frame_group_tixcraft, width=20, textvariable = txt_ares_keyword_value)
     txt_area_keyword.grid(column=1, row=area_keyword_index, sticky = W)
 
+    group_row_count+=1
+
+    lbl_captcha_assist = Label(frame_group_tixcraft, text="CAPTCHA Assist")
+    lbl_captcha_assist.grid(column=0, row=group_row_count, sticky = E)
+
+    global chk_state_captcha_assist
+    chk_state_captcha_assist = BooleanVar()
+    chk_state_captcha_assist.set(captcha_assist)
+    chk_captcha_assist = Checkbutton(frame_group_tixcraft, text="Enable", variable=chk_state_captcha_assist)
+    chk_captcha_assist.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_captcha_prompt_timeout_s = Label(frame_group_tixcraft, text="CAPTCHA Timeout (seconds)")
+    lbl_captcha_prompt_timeout_s.grid(column=0, row=group_row_count, sticky = E)
+
+    global txt_captcha_prompt_timeout_s
+    global txt_captcha_prompt_timeout_s_value
+    txt_captcha_prompt_timeout_s_value = StringVar(frame_group_tixcraft, value=str(captcha_prompt_timeout_s))
+    txt_captcha_prompt_timeout_s = Entry(frame_group_tixcraft, width=20, textvariable = txt_captcha_prompt_timeout_s_value)
+    txt_captcha_prompt_timeout_s.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_captcha_max_retries = Label(frame_group_tixcraft, text="CAPTCHA Max Retries")
+    lbl_captcha_max_retries.grid(column=0, row=group_row_count, sticky = E)
+
+    global txt_captcha_max_retries
+    global txt_captcha_max_retries_value
+    txt_captcha_max_retries_value = StringVar(frame_group_tixcraft, value=str(captcha_max_retries))
+    txt_captcha_max_retries = Entry(frame_group_tixcraft, width=20, textvariable = txt_captcha_max_retries_value)
+    txt_captcha_max_retries.grid(column=1, row=group_row_count, sticky = W)
+
     global frame_group_tixcraft_index
     frame_group_tixcraft_index = row_count
     frame_group_tixcraft.grid(column=0, row=row_count, sticky = W, padx=UI_PADDING_X)
@@ -750,7 +809,7 @@ def main():
     GUI = MainMenu(root)
 
     GUI_SIZE_WIDTH = 420
-    GUI_SIZE_HEIGHT = 340
+    GUI_SIZE_HEIGHT = 430
     GUI_SIZE_MACOS = str(GUI_SIZE_WIDTH) + 'x' + str(GUI_SIZE_HEIGHT)
     GUI_SIZE_WINDOWS=str(GUI_SIZE_WIDTH-60) + 'x' + str(GUI_SIZE_HEIGHT-20)
 

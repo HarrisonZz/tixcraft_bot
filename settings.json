@@ -17,7 +17,10 @@
       "enable": true,
       "mode": "random",
       "area_keyword": ""
-    }
+    },
+    "captcha_assist": false,
+    "captcha_prompt_timeout_s": 60,
+    "captcha_max_retries": 3
   },
   "kktix": {
     "auto_press_next_step_button": true,

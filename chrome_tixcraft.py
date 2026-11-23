@@ -6,6 +6,8 @@ from selenium.webdriver.support.ui import Select
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.firefox.service import Service as FirefoxService
 
+from captcha_assist import CaptchaAssist
+
 # for close tab.
 from selenium.common.exceptions import NoSuchWindowException
 from selenium.common.exceptions import WebDriverException
@@ -83,6 +85,10 @@ area_auto_select_enable = True
 area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 area_keyword = ""
 
+captcha_assist_enabled = False
+captcha_prompt_timeout_s = 60
+captcha_max_retries = 3
+
 kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 kktix_area_keyword = ""
 
@@ -96,6 +102,7 @@ def load_config(filepath=None):
     global auto_press_next_step_button, auto_fill_ticket_number
     global date_auto_select_enable, date_auto_select_mode, date_keyword
     global area_auto_select_enable, area_auto_select_mode, area_keyword
+    global captcha_assist_enabled, captcha_prompt_timeout_s, captcha_max_retries
     global kktix_area_auto_select_mode, kktix_area_keyword
     global kktix_answer_dictionary, kktix_answer_dictionary_list
 
@@ -161,6 +168,9 @@ def load_config(filepath=None):
     # for ["tixcraft"]
     date_keyword = ""
     area_keyword = ""
+    captcha_assist_enabled = False
+    captcha_prompt_timeout_s = 60
+    captcha_max_retries = 3
     if 'tixcraft' in config_dict:
         date_cfg = config_dict["tixcraft"].get("date_auto_select", {})
         date_auto_select_enable = bool(date_cfg.get("enable", True))
@@ -181,6 +191,16 @@ def load_config(filepath=None):
 
         if 'area_keyword' in area_cfg and area_cfg["area_keyword"] is not None:
             area_keyword = str(area_cfg["area_keyword"]).strip()
+
+        captcha_assist_enabled = bool(config_dict["tixcraft"].get("captcha_assist", False))
+        try:
+            captcha_prompt_timeout_s = max(int(config_dict["tixcraft"].get("captcha_prompt_timeout_s", 60)), 1)
+        except (TypeError, ValueError):
+            captcha_prompt_timeout_s = 60
+        try:
+            captcha_max_retries = max(int(config_dict["tixcraft"].get("captcha_max_retries", 3)), 1)
+        except (TypeError, ValueError):
+            captcha_max_retries = 3
 
     # entry point
     # 說明：自動開啟第一個的網頁
@@ -990,6 +1010,23 @@ def tixcraft_verify(url):
 
     return ret
 
+
+def _run_captcha_assist(driver_instance):
+    if not captcha_assist_enabled:
+        return None
+
+    # Any failure must fall back to manual entry; never abort the purchase loop.
+    try:
+        assist = CaptchaAssist(
+            timeout_s=captcha_prompt_timeout_s,
+            max_retries=captcha_max_retries,
+        )
+        return assist.run(driver_instance)
+    except Exception as exc:
+        print("CAPTCHA assist failed: %s" % exc)
+        return None
+
+
 def tixcraft_ticket_main(url, is_verifyCode_editing):
     form_select = None
     for selector in ('.mobile-select', 'select[id^="TicketForm_ticketPrice"]', '#TicketForm select'):
@@ -1015,7 +1052,13 @@ def tixcraft_ticket_main(url, is_verifyCode_editing):
     if is_verifyCode_editing == False:
         ticket_number_auto_fill(url, form_select)
 
-        # start to input verify code manually.
+        # Opt-in only. The order form is never submitted here: the user still
+        # reviews the filled code and confirms the order and payment.
+        if captcha_assist_enabled:
+            if not _run_captcha_assist(driver):
+                print("CAPTCHA assist did not fill the code; continuing with manual entry")
+
+        # Keep focus on the verification input for review or manual fallback.
         try:
             driver.execute_script(
                 'var vc = document.getElementById("TicketForm_verifyCode"); if (vc) { vc.focus(); }'
