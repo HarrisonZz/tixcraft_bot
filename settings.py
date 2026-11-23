@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #encoding=utf-8
 
 try:
@@ -15,8 +15,10 @@ except ImportError:
 import os
 import sys
 import json
+import platform
+import subprocess
 
-CONST_APP_VERSION = u"MaxBot (2019.09.24)"
+CONST_APP_VERSION = u"MaxBot (2019.09.24-py3-sel4)"
 
 CONST_FROM_TOP_TO_BOTTOM = u"from top to bottom"
 CONST_FROM_BOTTOM_TO_TOP = u"from bottom to top"
@@ -33,26 +35,64 @@ window = None
 btn_save = None
 btn_exit = None
 
-def load_json():
-    # 讀取檔案裡的參數值
-    basis = ""
+
+def get_app_root():
     if hasattr(sys, 'frozen'):
         basis = sys.executable
     else:
-        basis = sys.argv[0]
-    app_root = os.path.dirname(basis)
+        basis = os.path.abspath(__file__)
+    return os.path.dirname(basis)
+
+
+def get_default_config():
+    return {
+        "homepage": "https://tixcraft.com",
+        "browser": "chrome",
+        "ticket_number": 2,
+        "facebook_account": "",
+        "tixcraft": {
+            "date_auto_select": {
+                "enable": True,
+                "mode": CONST_SELECT_ORDER_DEFAULT,
+                "date_keyword": "",
+            },
+            "area_auto_select": {
+                "enable": True,
+                "mode": CONST_RANDOM,
+                "area_keyword": "",
+            },
+        },
+        "kktix": {
+            "auto_press_next_step_button": True,
+            "auto_fill_ticket_number": True,
+            "auto_fill_ticket_price": "$1,500",
+            "area_mode": CONST_RANDOM,
+            "area_keyword": "",
+            "answer_dictionary": "",
+        },
+    }
+
+
+def load_json(filepath=None):
+    # 讀取檔案裡的參數值
+    app_root = get_app_root()
 
     global config_filepath
-    config_filepath = os.path.join(app_root, 'settings.json')
+    config_filepath = filepath if filepath is not None else os.path.join(app_root, 'settings.json')
 
     global config_dict
     config_dict = None
     if os.path.isfile(config_filepath):
-        with open(config_filepath) as json_data:
+        with open(config_filepath, encoding='utf-8') as json_data:
             config_dict = json.load(json_data)
+    else:
+        config_dict = get_default_config()
+    return config_dict
+
 
 def btn_save_clicked():
     btn_save_act()
+
 
 def btn_save_act(slience_mode=False):
 
@@ -61,16 +101,17 @@ def btn_save_act(slience_mode=False):
     global config_filepath
 
     global config_dict
-    if not config_dict is None:
+    if config_dict is not None:
         # read user input
 
         global combo_homepage
         global combo_browser
         global txt_ticket_number
         #global txt_facebook_account
-    
+
         global chk_state_auto_press_next_step_button
         global chk_state_auto_fill_ticket_number
+        global combo_kktix_area_mode
         global txt_kktix_area_keyword
         global txt_kktix_answer_dictionary
 
@@ -83,36 +124,49 @@ def btn_save_act(slience_mode=False):
         global combo_area_auto_select_mode
 
         if is_all_data_correct:
-            if combo_homepage.get().strip()=="":
+            if combo_homepage.get().strip() == "":
                 is_all_data_correct = False
                 messagebox.showerror("Error", "Please enter homepage")
             else:
                 config_dict["homepage"] = combo_homepage.get().strip()
 
         if is_all_data_correct:
-            if combo_browser.get().strip()=="":
+            if combo_browser.get().strip() == "":
                 is_all_data_correct = False
                 messagebox.showerror("Error", "Please enter browser: chrome or firefox")
             else:
                 config_dict["browser"] = combo_browser.get().strip()
 
         if is_all_data_correct:
-            if txt_ticket_number.get().strip()=="":
+            ticket_num_str = txt_ticket_number.get().strip()
+            if ticket_num_str == "":
                 is_all_data_correct = False
-                messagebox.showerror("Error", "Please enter text")
+                messagebox.showerror("Error", "Please enter ticket number")
             else:
-                config_dict["ticket_number"] = int(txt_ticket_number.get().strip())
+                try:
+                    parsed_ticket_number = int(ticket_num_str)
+                    if parsed_ticket_number <= 0:
+                        raise ValueError("ticket_number must be positive")
+                    config_dict["ticket_number"] = parsed_ticket_number
+                except ValueError:
+                    is_all_data_correct = False
+                    messagebox.showerror("Error", "Ticket number must be a positive integer")
 
         if is_all_data_correct:
             #config_dict["facebook_account"] = txt_facebook_account.get().strip()
             pass
 
         if is_all_data_correct:
+            config_dict.setdefault("kktix", {})
             config_dict["kktix"]["auto_press_next_step_button"] = bool(chk_state_auto_press_next_step_button.get())
             config_dict["kktix"]["auto_fill_ticket_number"] = bool(chk_state_auto_fill_ticket_number.get())
             config_dict["kktix"]["area_mode"] = combo_kktix_area_mode.get().strip()
             config_dict["kktix"]["area_keyword"] = txt_kktix_area_keyword.get().strip()
             config_dict["kktix"]["answer_dictionary"] = txt_kktix_answer_dictionary.get().strip()
+
+            config_dict.setdefault("tixcraft", {})
+            config_dict["tixcraft"].setdefault("date_auto_select", {})
+            config_dict["tixcraft"].setdefault("area_auto_select", {})
 
             config_dict["tixcraft"]["date_auto_select"]["enable"] = bool(chk_state_date_auto_select.get())
             config_dict["tixcraft"]["date_auto_select"]["date_keyword"] = txt_date_keyword.get().strip()
@@ -125,29 +179,27 @@ def btn_save_act(slience_mode=False):
 
         # save config.
         if is_all_data_correct:
-            import json
-            with open(config_filepath, 'w') as outfile:
-                json.dump(config_dict, outfile)
+            with open(config_filepath, 'w', encoding='utf-8') as outfile:
+                json.dump(config_dict, outfile, indent=2, ensure_ascii=False)
 
-            if slience_mode==False:
+            if slience_mode == False:
                 messagebox.showinfo("File Save", "Done ^_^")
 
     return is_all_data_correct
 
+
 def btn_run_clicked():
     if btn_save_act(slience_mode=True):
-        import subprocess
+        app_root = get_app_root()
         if hasattr(sys, 'frozen'):
-            import platform
-
             # check platform here.
-            # for windows.
-            if platform.system() == 'Darwin':
-                 subprocess.Popen("./chrome_tixcraft", shell=True)
             if platform.system() == 'Windows':
-                subprocess.Popen("chrome_tixcraft.exe", shell=True)
+                subprocess.Popen([os.path.join(app_root, "chrome_tixcraft.exe")], cwd=app_root)
+            else:
+                subprocess.Popen([os.path.join(app_root, "chrome_tixcraft")], cwd=app_root)
         else:
-            subprocess.Popen("python chrome_tixcraft.py", shell=True)
+            script_path = os.path.join(app_root, "chrome_tixcraft.py")
+            subprocess.Popen([sys.executable, script_path], cwd=app_root)
 
 
 def btn_exit_clicked():
@@ -244,6 +296,7 @@ def showHideTixcraftBlocks():
     global txt_date_keyword
 
     # field 2
+    global chk_state_area_auto_select
     global chk_area_auto_select
 
     global area_auto_select_index

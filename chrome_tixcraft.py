@@ -1,11 +1,14 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #encoding=utf-8
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.firefox.service import Service as FirefoxService
 
 # for close tab.
 from selenium.common.exceptions import NoSuchWindowException
+from selenium.common.exceptions import WebDriverException
 # for alert
 from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import NoAlertPresentException
@@ -13,9 +16,6 @@ from selenium.common.exceptions import NoAlertPresentException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
-# for ["pageLoadStrategy"] = "eager"
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 
 # for wait #1
 import time
@@ -28,6 +28,7 @@ import random
 
 import re
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 # for error output
 import logging
@@ -39,7 +40,7 @@ logger = logging.getLogger('logger')
 #附註1：沒有寫的很好，很多地方應該可以模組化。
 #附註2：
 
-CONST_APP_VERSION = u"MaxBot (2019.09.24)"
+CONST_APP_VERSION = u"MaxBot (2019.09.24-py3-sel4)"
 
 CONST_FROM_TOP_TO_BOTTOM = u"from top to bottom"
 CONST_FROM_BOTTOM_TO_TOP = u"from bottom to top"
@@ -52,110 +53,141 @@ CONST_SELECT_OPTIONS_ARRAY = [CONST_FROM_TOP_TO_BOTTOM, CONST_FROM_BOTTOM_TO_TOP
 # 說明：初始化 webdriver
 driver = None
 
-# 讀取檔案裡的參數值
-basis = ""
-if hasattr(sys, 'frozen'):
-    basis = sys.executable
-else:
-    basis = sys.argv[0]
-app_root = os.path.dirname(basis)
 
+def get_app_root():
+    if hasattr(sys, 'frozen'):
+        basis = sys.executable
+    else:
+        basis = os.path.abspath(__file__)
+    return os.path.dirname(basis)
+
+
+app_root = get_app_root()
 config_filepath = os.path.join(app_root, 'settings.json')
 config_dict = None
-if os.path.isfile(config_filepath):
-    with open(config_filepath) as json_data:
-        config_dict = json.load(json_data)
 
-homepage = None
-browser = None
-ticket_number = None
-facebook_account = None
+homepage = "https://tixcraft.com"
+browser = "chrome"
+ticket_number = "2"
+facebook_account = ""
 
-auto_press_next_step_button = None
-auto_fill_ticket_number = None
+auto_press_next_step_button = False
+auto_fill_ticket_number = True
 auto_fill_ticket_price = None
 
-date_auto_select_enable = None
-date_auto_select_mode = None
-date_keyword = None
+date_auto_select_enable = True
+date_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
+date_keyword = ""
 
-area_auto_select_enable = None
-area_auto_select_mode = None
-area_keyword = None
+area_auto_select_enable = True
+area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
+area_keyword = ""
 
+kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
+kktix_area_keyword = ""
 
-kktix_area_auto_select_mode = None
-kktix_area_keyword = None
-
-kktix_answer_dictionary = None
+kktix_answer_dictionary = ""
 kktix_answer_dictionary_list = None
 
-if not config_dict is None:
+
+def load_config(filepath=None):
+    global config_filepath, config_dict
+    global homepage, browser, ticket_number, facebook_account
+    global auto_press_next_step_button, auto_fill_ticket_number
+    global date_auto_select_enable, date_auto_select_mode, date_keyword
+    global area_auto_select_enable, area_auto_select_mode, area_keyword
+    global kktix_area_auto_select_mode, kktix_area_keyword
+    global kktix_answer_dictionary, kktix_answer_dictionary_list
+
+    if filepath is not None:
+        config_filepath = filepath
+    else:
+        config_filepath = os.path.join(get_app_root(), 'settings.json')
+
+    config_dict = None
+    if os.path.isfile(config_filepath):
+        with open(config_filepath, encoding='utf-8') as json_data:
+            config_dict = json.load(json_data)
+
+    if config_dict is None:
+        print("Config error! settings.json not found:", config_filepath)
+        return None
+
     # read config.
     if 'homepage' in config_dict:
         homepage = config_dict["homepage"]
     if 'browser' in config_dict:
-        browser = config_dict["browser"]
+        browser = str(config_dict["browser"]).strip().lower()
 
     # default ticket number
     # 說明：自動選擇的票數
-    #ticket_number = "2"
     ticket_number = ""
     if 'ticket_number' in config_dict:
-        ticket_number = str(config_dict["ticket_number"])
+        ticket_number = str(config_dict["ticket_number"]).strip()
 
     facebook_account = ""
     if 'facebook_account' in config_dict:
         facebook_account = str(config_dict["facebook_account"])
 
     # for ["kktix"]
+    kktix_answer_dictionary = ""
+    kktix_answer_dictionary_list = None
+    kktix_area_keyword = ""
+    kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
     if 'kktix' in config_dict:
-        auto_press_next_step_button = config_dict["kktix"]["auto_press_next_step_button"]
-        auto_fill_ticket_number = config_dict["kktix"]["auto_fill_ticket_number"]
+        auto_press_next_step_button = bool(config_dict["kktix"].get("auto_press_next_step_button", False))
+        auto_fill_ticket_number = bool(config_dict["kktix"].get("auto_fill_ticket_number", True))
 
-        if 'area_mode' in config_dict["kktix"]:
-            kktix_area_auto_select_mode = config_dict["kktix"]["area_mode"]
-            kktix_area_auto_select_mode = kktix_area_auto_select_mode.strip()
-        if not kktix_area_auto_select_mode in CONST_SELECT_OPTIONS_ARRAY:
+        if 'area_mode' in config_dict["kktix"] and config_dict["kktix"]["area_mode"] is not None:
+            kktix_area_auto_select_mode = str(config_dict["kktix"]["area_mode"]).strip()
+        if kktix_area_auto_select_mode not in CONST_SELECT_OPTIONS_ARRAY:
             kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 
         if 'area_keyword' in config_dict["kktix"]:
             kktix_area_keyword = config_dict["kktix"]["area_keyword"]
             if kktix_area_keyword is None:
                 kktix_area_keyword = ""
-            kktix_area_keyword = kktix_area_keyword.strip()
+            kktix_area_keyword = str(kktix_area_keyword).strip()
 
         if 'answer_dictionary' in config_dict["kktix"]:
             kktix_answer_dictionary = config_dict["kktix"]["answer_dictionary"]
             if kktix_answer_dictionary is None:
                 kktix_answer_dictionary = ""
-            kktix_answer_dictionary = kktix_answer_dictionary.strip()
+            kktix_answer_dictionary = str(kktix_answer_dictionary).strip()
 
             if len(kktix_answer_dictionary) > 0:
-                kktix_answer_dictionary_list = kktix_answer_dictionary.split(',')
-
+                kktix_answer_dictionary_list = [x.strip() for x in kktix_answer_dictionary.split(',') if x.strip()]
 
     # for ["tixcraft"]
+    date_keyword = ""
+    area_keyword = ""
     if 'tixcraft' in config_dict:
-        date_auto_select_enable = config_dict["tixcraft"]["date_auto_select"]["enable"]
-        date_auto_select_mode = config_dict["tixcraft"]["date_auto_select"]["mode"]
+        date_cfg = config_dict["tixcraft"].get("date_auto_select", {})
+        date_auto_select_enable = bool(date_cfg.get("enable", True))
+        date_auto_select_mode = str(date_cfg.get("mode", CONST_SELECT_ORDER_DEFAULT)).strip()
 
-        if not date_auto_select_mode in CONST_SELECT_OPTIONS_ARRAY:
+        if date_auto_select_mode not in CONST_SELECT_OPTIONS_ARRAY:
             date_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 
-        if 'date_keyword' in config_dict["tixcraft"]["date_auto_select"]:
-            date_keyword = config_dict["tixcraft"]["date_auto_select"]["date_keyword"]
-            date_keyword = date_keyword.strip()
+        if 'date_keyword' in date_cfg and date_cfg["date_keyword"] is not None:
+            date_keyword = str(date_cfg["date_keyword"]).strip()
 
-        area_auto_select_enable = config_dict["tixcraft"]["area_auto_select"]["enable"]
-        area_auto_select_mode = config_dict["tixcraft"]["area_auto_select"]["mode"]
+        area_cfg = config_dict["tixcraft"].get("area_auto_select", {})
+        area_auto_select_enable = bool(area_cfg.get("enable", True))
+        area_auto_select_mode = str(area_cfg.get("mode", CONST_SELECT_ORDER_DEFAULT)).strip()
 
-        if not area_auto_select_mode in CONST_SELECT_OPTIONS_ARRAY:
+        if area_auto_select_mode not in CONST_SELECT_OPTIONS_ARRAY:
             area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 
-        if 'area_keyword' in config_dict["tixcraft"]["area_auto_select"]:
-            area_keyword = config_dict["tixcraft"]["area_auto_select"]["area_keyword"]
-            area_keyword = area_keyword.strip()
+        if 'area_keyword' in area_cfg and area_cfg["area_keyword"] is not None:
+            area_keyword = str(area_cfg["area_keyword"]).strip()
+
+    # entry point
+    # 說明：自動開啟第一個的網頁
+    if homepage is None or len(str(homepage).strip()) == 0:
+        homepage = "https://tixcraft.com/activity/"
+    else:
+        homepage = str(homepage).strip()
 
     # output config:
     print("version", CONST_APP_VERSION)
@@ -176,67 +208,62 @@ if not config_dict is None:
     print("date_auto_select_enable", date_auto_select_enable)
     print("date_auto_select_mode", date_auto_select_mode)
     print("date_keyword", date_keyword)
-    
+
     print("area_auto_select_enable", area_auto_select_enable)
     print("area_auto_select_mode", area_auto_select_mode)
     print("area_keyword", area_keyword)
 
-    # entry point
-    # 說明：自動開啟第一個的網頁
-    if homepage is None:
-        homepage = ""
-    if len(homepage) == 0:
-        homepage = "https://tixcraft.com/activity/"
+    return config_dict
 
-    Root_Dir = ""
-    if browser == "chrome":
-        chrome_options = None
-        # default os is linux/mac
-        chromedriver_path =Root_Dir+ "webdriver/chromedriver"
-        if platform.system()=="windows":
-            chromedriver_path =Root_Dir+ "webdriver/chromedriver.exe"
 
-        extension_path = Root_Dir + "webdriver/AdBlock.crx"
-        extension_file_exist = os.path.isfile(extension_path)
+def create_driver(browser_name=None, headless=False):
+    target_browser = (browser_name or browser or "chrome").strip().lower()
+    root_dir = get_app_root()
+    is_windows = platform.system() == "Windows"
+
+    if target_browser == "chrome":
+        driver_filename = "chromedriver.exe" if is_windows else "chromedriver"
+        chromedriver_path = os.path.join(root_dir, "webdriver", driver_filename)
 
         chrome_options = webdriver.ChromeOptions()
         chrome_options.add_experimental_option("excludeSwitches", ['enable-automation'])
-        #chrome_options.add_argument("--disable-popup-blocking");
-        if extension_file_exist:
-            chrome_options.add_extension(extension_path)
+        chrome_options.page_load_strategy = "eager"
+        chrome_options.unhandled_prompt_behavior = "ignore"
+
+        if headless:
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
         else:
-            print("extention not exist")
+            for ext_name in ("AdBlock.crx", "BlockYourselfFromAnalytics.crx"):
+                extension_path = os.path.join(root_dir, "webdriver", ext_name)
+                if os.path.isfile(extension_path):
+                    chrome_options.add_extension(extension_path)
+                else:
+                    print("extension not exist:", extension_path)
 
+        if os.path.isfile(chromedriver_path):
+            service = ChromeService(executable_path=chromedriver_path)
+            return webdriver.Chrome(service=service, options=chrome_options)
+        # Fall back to Selenium 4 Selenium Manager when local driver binary is absent.
+        return webdriver.Chrome(options=chrome_options)
 
-        extension_path = Root_Dir + "webdriver/BlockYourselfFromAnalytics.crx"
-        extension_file_exist = os.path.isfile(extension_path)
+    if target_browser == "firefox":
+        driver_filename = "geckodriver.exe" if is_windows else "geckodriver"
+        geckodriver_path = os.path.join(root_dir, "webdriver", driver_filename)
 
-        if extension_file_exist:
-            chrome_options.add_extension(extension_path)
-        else:
-            print("extention not exist")
+        firefox_options = webdriver.FirefoxOptions()
+        firefox_options.page_load_strategy = "eager"
+        firefox_options.unhandled_prompt_behavior = "ignore"
+        if headless:
+            firefox_options.add_argument("-headless")
 
-        caps = DesiredCapabilities().CHROME
-        #caps["pageLoadStrategy"] = u"normal"  #  complete
-        caps["pageLoadStrategy"] = u"eager"  #  interactive
-        #caps["pageLoadStrategy"] = u"none"
-        
-        #caps["unhandledPromptBehavior"] = u"dismiss and notify"  #  default
-        caps["unhandledPromptBehavior"] = u"ignore"
-        #caps["unhandledPromptBehavior"] = u"dismiss"
+        if os.path.isfile(geckodriver_path):
+            service = FirefoxService(executable_path=geckodriver_path)
+            return webdriver.Firefox(service=service, options=firefox_options)
+        return webdriver.Firefox(options=firefox_options)
 
-        driver = webdriver.Chrome(options=chrome_options, executable_path=chromedriver_path, desired_capabilities=caps)
-
-    if browser == "firefox":
-        # default os is linux/mac
-        chromedriver_path =Root_Dir+ "webdriver/geckodriver"
-        if platform.system()=="windows":
-            chromedriver_path =Root_Dir+ "webdriver/geckodriver.exe"
-        driver = webdriver.Firefox(executable_path=chromedriver_path)
-
-    driver.get(homepage)
-else:
-    print("Config error!")
+    raise ValueError("Unsupported browser: %s (expected 'chrome' or 'firefox')" % target_browser)
 
 # common functions.
 def find_between( s, first, last ):
@@ -272,22 +299,22 @@ def convert_string_to_pattern(my_str, dynamic_length=True):
             if not match_result is None:
                 my_formated += u"[a-z]"
 
-            pattern = re.compile(u"[\d]")
+            pattern = re.compile(r"[\d]")
             match_result = pattern.match(char)
             #print("match_result d:", match_result)
             if not match_result is None:
-                my_formated += u"[\d]"
+                my_formated += r"[\d]"
 
         # for dynamic length
         if dynamic_length:
             for i in range(10):
                 my_formated = my_formated.replace(u"[A-Z][A-Z]",u"[A-Z]")
                 my_formated = my_formated.replace(u"[a-z][a-z]",u"[a-z]")
-                my_formated = my_formated.replace(u"[\d][\d]",u"[\d]")
+                my_formated = my_formated.replace(r"[\d][\d]",r"[\d]")
 
             my_formated = my_formated.replace(u"[A-Z]",u"[A-Z]+")
             my_formated = my_formated.replace(u"[a-z]",u"[a-z]+")
-            my_formated = my_formated.replace(u"[\d]",u"[\d]+")
+            my_formated = my_formated.replace(r"[\d]",r"[\d]+")
     return my_formated
 
 def get_answer_list_by_question(captcha_text_div_text):
@@ -346,7 +373,7 @@ def get_answer_list_by_question(captcha_text_div_text):
         if u'(' in tmp_text and u')' in tmp_text and u'範例' in tmp_text:
             #import re
             #print("text:" , re.findall('\([\w]+\)', tmp_text))
-            hint_list = re.findall(u'\(.*?\)', tmp_text)
+            hint_list = re.findall(r'\(.*?\)', tmp_text)
             #print("hint_list:", hint_list)
         
         # try rule2:
@@ -478,7 +505,7 @@ def get_answer_list_by_question(captcha_text_div_text):
                 answer_char_count = tmp_text[star_index-1:star_index]
                 if answer_char_count.isnumeric():
                     star_index -= 1
-                    my_anwser_formated = u'[A-Za-z\d]' * int(answer_char_count)
+                    my_anwser_formated = r'[A-Za-z\d]' * int(answer_char_count)
                 my_hint = tmp_text[star_index: space_index]
 
         if len(my_hint) == 0:
@@ -489,7 +516,7 @@ def get_answer_list_by_question(captcha_text_div_text):
                 answer_char_count = tmp_text[star_index-1:star_index]
                 if answer_char_count.isnumeric():
                     star_index -= 1
-                    my_anwser_formated = u'[A-Za-z\d]' * int(answer_char_count)
+                    my_anwser_formated = r'[A-Za-z\d]' * int(answer_char_count)
                 my_hint = tmp_text[star_index: space_index]
 
         #print(u"my_hint:", my_hint)
@@ -519,9 +546,10 @@ def get_answer_list_by_question(captcha_text_div_text):
             search_result = pattern.search(my_options)
             if not search_result is None:
                 (span_start, span_end) = search_result.span()
+                maybe_delimitor = ""
                 if len(my_options) > (span_end+1)+1:
                     maybe_delimitor = my_options[span_end+0:span_end+1]
-                if maybe_delimitor in allow_delimitor_symbols:
+                if len(maybe_delimitor) > 0 and maybe_delimitor in allow_delimitor_symbols:
                     my_answer_delimitor = maybe_delimitor
         #print(u"my_answer_delimitor:", my_answer_delimitor)
 
@@ -582,66 +610,85 @@ def get_answer_list_by_question(captcha_text_div_text):
     #print("return_list:", return_list)
     return return_list, my_answer_delimitor
 
+def _select_target_index(items_len, mode):
+    if items_len <= 0:
+        return -1
+    if mode == CONST_FROM_BOTTOM_TO_TOP:
+        return items_len - 1
+    if mode == CONST_RANDOM:
+        return random.randint(0, items_len - 1)
+    return 0
+
+
+def _find_tixcraft_game_buttons(scope):
+    for selector in ('.btn-next', 'button[data-href]', 'button.btn-primary', 'a.btn-primary'):
+        try:
+            buttons = scope.find_elements(By.CSS_SELECTOR, selector)
+            enabled_buttons = [btn for btn in buttons if btn.is_enabled()]
+            if enabled_buttons:
+                return enabled_buttons
+        except Exception:
+            pass
+    return []
+
+
+def _click_tixcraft_game_button(el, current_url):
+    try:
+        el.click()
+        return True
+    except Exception as exc:
+        print("try to click game button fail:", exc)
+        try:
+            data_href = el.get_attribute('data-href')
+            if data_href:
+                if data_href.startswith('http://') or data_href.startswith('https://'):
+                    driver.get(data_href)
+                else:
+                    parsed = urlparse(current_url)
+                    base = "%s://%s" % (parsed.scheme, parsed.netloc)
+                    if not data_href.startswith('/'):
+                        data_href = '/' + data_href
+                    driver.get(base + data_href)
+                return True
+        except Exception as exc2:
+            print("fallback navigate data-href fail:", exc2)
+    return False
+
+
 # from detail to game
 def tixcraft_redirect(url):
-    game_name = ""
-
-    # get game_name from url
-    if "https://tixcraft.com/activity/detail/" in url:
-        url_split = url.split("/")
-        if len(url_split) >= 6:
-            game_name = url_split[5]
-
-    if url == "https://tixcraft.com/activity/detail/%s" % (game_name,):
-        entry_url = "https://tixcraft.com/activity/game/%s" % (game_name,)
+    parsed = urlparse(url)
+    path_parts = [p for p in parsed.path.split("/") if p]
+    if len(path_parts) >= 3 and path_parts[0] == "activity" and path_parts[1] == "detail":
+        game_name = path_parts[2]
+        entry_url = "%s://%s/activity/game/%s" % (parsed.scheme, parsed.netloc, game_name)
         driver.get(entry_url)
+        return True
+    return False
+
 
 def date_auto_select(url):
-    game_name = ""
-
-    if "https://tixcraft.com/activity/game/" in url:
-        url_split = url.split("/")
-        if len(url_split) >= 6:
-            game_name = url_split[5]
+    parsed = urlparse(url)
+    path_parts = [p for p in parsed.path.split("/") if p]
 
     # choose date
-    if url == "https://tixcraft.com/activity/game/%s" % (game_name,):
+    if len(path_parts) >= 3 and path_parts[0] == "activity" and path_parts[1] == "game":
+        clicked = False
         if len(date_keyword) == 0:
-            el = None
-
-            if date_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
-                try:
-                    el = driver.find_element(By.CSS_SELECTOR, '.btn-next')
-                except Exception as exc:
-                    print("find .btn-next fail")
-            else:
-                # from down to top
-                days = None
-                try:
-                    days = driver.find_elements(By.CSS_SELECTOR, '.btn-next')
-                    if len(days) > 0:
-                        el = days[len(days)-1]
-                except Exception as exc:
-                    pass
-                    #print("find a tag fail")
-
-            if el is not None:
-                # first date.
-                try:
-                    el.click()
-                except Exception as exc:
-                    print("try to click .btn-next fail")
+            buttons = _find_tixcraft_game_buttons(driver)
+            target_idx = _select_target_index(len(buttons), date_auto_select_mode)
+            if target_idx >= 0:
+                clicked = _click_tixcraft_game_button(buttons[target_idx], url)
         else:
             # match keyword.
             date_list = None
             try:
-                date_list = driver.find_elements(By.CSS_SELECTOR, '#gameList > table > tbody > tr')
+                date_list = driver.find_elements(By.CSS_SELECTOR, '#gameList table tbody tr')
             except Exception as exc:
                 print("find #gameList fail")
 
-            if date_list is not None:
-                match_keyword_row = False
-
+            if date_list:
+                matched_buttons = []
                 for row in date_list:
                     row_text = ""
                     try:
@@ -650,154 +697,119 @@ def date_auto_select(url):
                         print("get text fail")
                         break
 
-                    if len(row_text) > 0:
-                        if date_keyword in row_text:
-                            match_keyword_row = True
+                    if len(row_text) > 0 and date_keyword in row_text:
+                        row_buttons = _find_tixcraft_game_buttons(row)
+                        if row_buttons:
+                            matched_buttons.append(row_buttons[0])
+                            if date_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
+                                break
 
-                            el = None
-                            try:
-                                el = row.find_element(By.CSS_SELECTOR, '.btn-next')
-                            except Exception as exc:
-                                print("find .btn-next fail")
+                target_idx = _select_target_index(len(matched_buttons), date_auto_select_mode)
+                if target_idx >= 0:
+                    clicked = _click_tixcraft_game_button(matched_buttons[target_idx], url)
 
-                            if el is not None:
-                                # first date.
-                                try:
-                                    el.click()
-                                except Exception as exc:
-                                    print("try to click .btn-next fail")
+        if clicked:
+            return True
 
-                        if match_keyword_row:
-                            break
-
-        # auto refresh for date list page.
-        el_list = None
+        # auto refresh for date list page when no target button is available yet.
         try:
-            el_list = driver.find_elements(By.CSS_SELECTOR, '.btn-next')
-            if el_list is None:
-                driver.refresh()
-            else:
-                if len(el_list) == 0:
-                    driver.refresh()
+            time.sleep(0.3)
+            driver.refresh()
         except Exception as exc:
             pass
-            #print("find .btn-next fail:", exc)
+    return False
 
 
 # PS: auto refresh condition 1: no keyword + no hyperlink.
-# PS: auto refresh condition 2: with keyword + no hyperlink.
+# PS: auto refresh condition 2: with keyword + no matching hyperlink.
 def area_auto_select(url):
-    if 'tixcraft.com/ticket/area/' in url:
+    parsed = urlparse(url)
+    if '/ticket/area/' in parsed.path:
         #driver.switch_to.default_content()
 
         el = None
-        try:
-            el = driver.find_element(By.CSS_SELECTOR, '.zone')
-        except Exception as exc:
+        for selector in ('.zone', '.area-list', '#select_form_auto'):
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, selector)
+                if el is not None:
+                    break
+            except Exception:
+                pass
+        if el is None:
             print("find .zone fail, do nothing.")
 
         if el is not None:
-            areas = None
-
+            areas = []
             is_need_refresh = False
 
-            if len(area_keyword) == 0:
-                try:
-                    areas = el.find_elements(By.TAG_NAME, "a")
-                except Exception as exc:
-                    pass
+            area_list = None
+            try:
+                area_list = el.find_elements(By.TAG_NAME, "a")
+            except Exception as exc:
+                pass
 
-                if areas is not None:
-                    if len(areas) == 0:
-                        print("list is empty, do refresh!")
-                        is_need_refresh = True
-                else:
-                    print("list is None, do refresh!")
-                    is_need_refresh = True
-            else:
-                # match keyword.
-                area_list = None
-                try:
-                    area_list = el.find_elements(By.TAG_NAME, 'a')
-                except Exception as exc:
-                    #print("find area list a tag fail")
-                    pass
-
-                if area_list is not None:
-                    if len(area_list) == 0:
-                        print("(with keyword) list is empty, do refresh!")
-                        is_need_refresh = True
-                else:
-                    print("(with keyword) list is None, do refresh!")
-                    is_need_refresh = True
-
-                if area_list is not None:
-                    areas = []
-                    for row in area_list:
-                        row_is_enabled=False
-                        try:
-                            row_is_enabled = row.is_enabled()
-                        except Exception as exc:
-                            pass
-
-                        row_text = ""
-                        if row_is_enabled:
-                            try:
-                                row_text = row.text
-                            except Exception as exc:
-                                print("get text fail")
-                                break
-
-                        if len(row_text) > 0:
-                            if area_keyword in row_text:
-                                areas.append(row)
-
-                                if area_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
-                                    print("only need first item, break area list loop.")
-                                    break
-                                #print("row_text:" + row_text)
-                                #print("match:" + area_keyword)
-
-            area_target = None
-            if areas is not None:
-                #print("area_auto_select_mode", area_auto_select_mode)
-                #print("len(areas)", len(areas))
-                if len(areas) > 0:
-                    target_row_index = 0
-
-                    if area_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
+            if area_list is not None:
+                for row in area_list:
+                    row_is_enabled = False
+                    try:
+                        row_is_enabled = row.is_enabled()
+                    except Exception as exc:
                         pass
 
-                    if area_auto_select_mode == CONST_FROM_BOTTOM_TO_TOP:
-                        target_row_index = len(areas)-1
+                    if not row_is_enabled:
+                        continue
 
-                    if area_auto_select_mode == CONST_RANDOM:
-                        target_row_index = random.randint(0,len(areas)-1)
+                    if len(area_keyword) == 0:
+                        areas.append(row)
+                    else:
+                        row_text = ""
+                        try:
+                            row_text = row.text
+                        except Exception as exc:
+                            print("get text fail")
+                            break
 
-                    #print("target_row_index", target_row_index)
-                    area_target = areas[target_row_index]
+                        if len(row_text) > 0 and area_keyword in row_text:
+                            areas.append(row)
+                            if area_auto_select_mode == CONST_FROM_TOP_TO_BOTTOM:
+                                print("only need first item, break area list loop.")
+                                break
+
+            if len(areas) == 0:
+                if len(area_keyword) == 0:
+                    print("list is empty, do refresh!")
+                else:
+                    print("(with keyword) no matching area, do refresh!")
+                is_need_refresh = True
+
+            area_target = None
+            if len(areas) > 0:
+                target_row_index = _select_target_index(len(areas), area_auto_select_mode)
+                area_target = areas[target_row_index]
 
             if area_target is not None:
                 try:
                     print("area text", area_target.text)
                     area_target.click()
+                    return True
                 except Exception as exc:
                     print("click area a link fail, start to retry...")
                     time.sleep(0.2)
                     try:
                         area_target.click()
-                    except Exception as exc:
-                        print("click area a link fail, after reftry still fail.")
-                        print(exc)
-                        pass
-
+                        return True
+                    except Exception as exc2:
+                        print("click area a link fail, after retry still fail.")
+                        print(exc2)
 
             # auto refresh for area list page.
             if is_need_refresh:
                 try:
+                    time.sleep(0.3)
                     driver.refresh()
                 except Exception as exc:
                     pass
+    return False
 
 '''
         el_selectSeat_iframe = None
@@ -844,79 +856,50 @@ def ticket_number_auto_fill(url, form_select):
     try:
         form_checkbox = driver.find_element(By.ID, 'TicketForm_agree')
 
-        if form_checkbox is not None:
+        if form_checkbox is not None and not form_checkbox.is_selected():
             try:
                 form_checkbox.click()
             except Exception as exc:
                 print("click TicketForm_agree fail")
-                pass
     except Exception as exc:
         print("find TicketForm_agree fail")
 
-    # 使用 plan B.
+    # 使用 plan B: only set via JS if checkbox is still unchecked.
     try:
-        #driver.execute_script("$(\"input[type='checkbox']\").prop('checked', true);")
-        driver.execute_script("document.getElementById(\"TicketForm_agree\").checked;")
+        if form_checkbox is None or not form_checkbox.is_selected():
+            driver.execute_script(
+                'var cb = document.getElementById("TicketForm_agree");'
+                'if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event("change", {bubbles: true})); }'
+            )
     except Exception as exc:
         print("javascript check TicketForm_agree fail")
         print(exc)
-        pass
 
     # select options
     select = None
     try:
-        #select = driver.find_element(By.TAG_NAME, 'select')
         select = Select(form_select)
-        #select = driver.find_element(By.CSS_SELECTOR, '.mobile-select')
     except Exception as exc:
         print("select fail")
 
     if select is not None:
-        try:
-            # target ticket number
-            select.select_by_visible_text(ticket_number)
-            #select.select_by_value(ticket_number)
-            #select.select_by_index(int(ticket_number))
-        except Exception as exc:
-            print("select_by_visible_text ticket_number fail")
-            print(exc)
-
+        selected = False
+        for attempt in (
+            lambda: select.select_by_visible_text(ticket_number),
+            lambda: select.select_by_value(ticket_number),
+            lambda: select.select_by_visible_text("1"),
+            lambda: select.select_by_value("1"),
+        ):
             try:
-                # target ticket number
-                select.select_by_visible_text(ticket_number)
-                #select.select_by_value(ticket_number)
-                #select.select_by_index(int(ticket_number))
+                attempt()
+                selected = True
+                break
             except Exception as exc:
-                print("select_by_visible_text ticket_number fail...2")
-                print(exc)
+                print("select ticket_number attempt fail:", exc)
+        if not selected:
+            print("unable to select ticket_number:", ticket_number)
 
-                # try buy one ticket
-                try:
-                    select.select_by_visible_text("1")
-                    #select.select_by_value("1")
-                    #select.select_by_index(int(ticket_number))
-                except Exception as exc:
-                    print("select_by_visible_text 1 fail")
-                    pass
-
-    # because click cause click wrong row.
-    if select is not None:
-        try:
-            # target ticket number
-            #select.select_by_visible_text(ticket_number)
-            print("assign ticker number by jQuery:",ticket_number)
-            driver.execute_script("$(\"input[type='select']\").val(\""+ ticket_number +"\");")
-        except Exception as exc:
-            print("jQuery select_by_visible_text ticket_number fail (after click.)")
-            print(exc)
-
-    # click again.
-    try:
-        form_select.click()
-    except Exception as exc:
-        print("click select fail")
-        pass
-
+    # Focus verify code input so the user can enter the verification code manually.
     form_verifyCode = None
     try:
         form_verifyCode = driver.find_element(By.ID, 'TicketForm_verifyCode')
@@ -925,7 +908,6 @@ def ticket_number_auto_fill(url, form_select):
                 form_verifyCode.click()
             except Exception as exc:
                 print("click form_verifyCode fail")
-                pass
     except Exception as exc:
         print("find form_verifyCode fail")
 
@@ -1010,40 +992,42 @@ def tixcraft_verify(url):
 
 def tixcraft_ticket_main(url, is_verifyCode_editing):
     form_select = None
-    try:
-        #form_select = driver.find_element(By.TAG_NAME, 'select')
-        form_select = driver.find_element(By.CSS_SELECTOR, '.mobile-select')
+    for selector in ('.mobile-select', 'select[id^="TicketForm_ticketPrice"]', '#TicketForm select'):
+        try:
+            form_select = driver.find_element(By.CSS_SELECTOR, selector)
+            if form_select is not None:
+                break
+        except Exception:
+            pass
 
-        if form_select is not None:
-            try:
-                #print("get select ticket value:" + Select(form_select).first_selected_option.text)
-                if Select(form_select).first_selected_option.text=="0":
-                    is_verifyCode_editing = False
-            except Exception as exc:
-                print("query selected option fail")
-                print(exc)
-                pass
-
-            if is_verifyCode_editing == False:
-                ticket_number_auto_fill(url, form_select)
-
-                # start to input verify code.
-                try:
-                    #driver.execute_script("$('#TicketForm_verifyCode').focus();")
-                    driver.execute_script("document.getElementById(\"TicketForm_verifyCode\").focus();")
-
-                    is_verifyCode_editing = True
-                    print("goto is_verifyCode_editing== True")
-                except Exception as exc:
-                    print(exc)
-                    pass
-            else:
-                #print("is_verifyCode_editing")
-                # do nothing here.
-                pass
-
-    except Exception as exc:
+    if form_select is None:
         print("find select fail")
+        return is_verifyCode_editing
+
+    try:
+        selected_option = Select(form_select).first_selected_option
+        if selected_option.text.strip() == "0" or selected_option.get_attribute("value") == "0":
+            is_verifyCode_editing = False
+    except Exception as exc:
+        print("query selected option fail")
+        print(exc)
+
+    if is_verifyCode_editing == False:
+        ticket_number_auto_fill(url, form_select)
+
+        # start to input verify code manually.
+        try:
+            driver.execute_script(
+                'var vc = document.getElementById("TicketForm_verifyCode"); if (vc) { vc.focus(); }'
+            )
+
+            is_verifyCode_editing = True
+            print("goto is_verifyCode_editing== True")
+        except Exception as exc:
+            print(exc)
+    else:
+        #print("is_verifyCode_editing")
+        # do nothing here.
         pass
 
     return is_verifyCode_editing
@@ -1729,13 +1713,11 @@ def fami_date_auto_select(url):
                                 print("find date image button fail")
             else:
                 # from bottom to top
-                print("not implement!")
-
                 row_index = 0
-                for row in date_list:
+                for row in reversed(date_list):
                     row_index += 1
 
-                    row_is_enabled=False
+                    row_is_enabled = False
                     try:
                         row_is_enabled = row.is_enabled()
                     except Exception as exc:
@@ -1754,7 +1736,6 @@ def fami_date_auto_select(url):
                             try:
                                 el = row.find_element(By.TAG_NAME, 'img')
                                 if el is not None:
-                                    print("bingo, found first date button")
                                     break
                             except Exception as exc:
                                 print("find date image button fail")
@@ -2156,21 +2137,8 @@ def urbtix_area_auto_select(url):
 
     area = None
     if areas is not None:
-        #print("area_auto_select_mode", area_auto_select_mode)
-        #print("len(areas)", len(areas))
         if len(areas) > 0:
-            target_row_index = 0
-
-            #if area_auto_select_mode == 'from_top_to_down':
-                #pass
-
-            #if area_auto_select_mode == 'from_down_to_up':
-                #target_row_index = len(areas)-1
-
-            #if area_auto_select_mode == "random":
-                #target_row_index = random.randint(0,len(areas)-1)
-
-            #print("target_row_index", target_row_index)
+            target_row_index = _select_target_index(len(areas), kktix_area_auto_select_mode)
             area = areas[target_row_index]
 
     if area is not None:
@@ -2292,21 +2260,8 @@ def cityline_area_auto_select(url):
 
     area = None
     if areas is not None:
-        #print("area_auto_select_mode", area_auto_select_mode)
-        #print("len(areas)", len(areas))
         if len(areas) > 0:
-            target_row_index = 0
-
-            #if area_auto_select_mode == 'from_top_to_down':
-                #pass
-
-            #if area_auto_select_mode == 'from_down_to_up':
-                #target_row_index = len(areas)-1
-
-            #if area_auto_select_mode == "random":
-                #target_row_index = random.randint(0,len(areas)-1)
-
-            #print("target_row_index", target_row_index)
+            target_row_index = _select_target_index(len(areas), kktix_area_auto_select_mode)
             area = areas[target_row_index]
 
     if area is not None:
@@ -2563,7 +2518,33 @@ def facebook_login(url):
     return ret
 
 
+def _is_driver_closed_error(exc):
+    msg = (str(exc) or repr(exc)).lower()
+    closed_markers = (
+        'chrome not reachable',
+        'invalid session id',
+        'disconnected',
+        'not connected to devtools',
+        'failed to decode response from marionette',
+        'browsing context has been discarded',
+        'target window already closed',
+    )
+    return any(marker in msg for marker in closed_markers)
+
+
 def main():
+    global driver
+
+    if load_config() is None:
+        sys.exit(1)
+
+    try:
+        driver = create_driver(browser)
+        driver.get(homepage)
+    except Exception as exc:
+        logger.error("Failed to initialize WebDriver: %s", exc, exc_info=True)
+        sys.exit(1)
+
     # internal variable. 說明：這是一個內部變數，請略過。
     url = ""
     last_url = ""
@@ -2572,267 +2553,182 @@ def main():
     # for kktix
     answer_index = -1
 
-    while True:
-        time.sleep(0.1)
+    try:
+        while True:
+            time.sleep(0.1)
 
-        is_alert_popup = False
-        '''
-        try:
-            if not driver is None:
-                WebDriverWait(driver, 0.2).until(EC.alert_is_present(),
-                                               'Timed out waiting for PA creation ' +
-                                               'confirmation popup to appear.')
-            is_pass_alert = False
-            if last_url == "":
-                #is_pass_alert = True
-                # no need to pass alert.
-                pass
+            is_alert_popup = False
 
-            # for tixcraft verify
-            if u'tixcraft' in last_url and u'/verify/' in last_url:
-                is_pass_alert = True
-
-            #print("is_pass_alert:", is_pass_alert)
-            if is_pass_alert:
+            # https://stackoverflow.com/questions/57481723/is-there-a-change-in-the-handling-of-unhandled-alert-in-chromedriver-and-chrome
+            default_close_alert_text = [
+            ]
+            try:
                 alert = None
-                if not driver is None:
+                if driver is not None:
                     alert = driver.switch_to.alert
-                if not alert is None:
-                    alert.accept()
-                    print("alert accepted")
-            else:
-                is_alert_popup = True
-        except TimeoutException:
-            #print("no alert")
-            pass
-        '''
+                if alert is not None:
+                    if alert.text is not None:
+                        is_match_auto_close_text = False
+                        for txt in default_close_alert_text:
+                            if len(txt) > 0:
+                                if txt in alert.text:
+                                    is_match_auto_close_text = True
+                        #print("alert3 text:", alert.text)
 
-        # https://stackoverflow.com/questions/57481723/is-there-a-change-in-the-handling-of-unhandled-alert-in-chromedriver-and-chrome
-        default_close_alert_text = [
-        ]
-        try:
-            alert = None
-            if not driver is None:
-                alert = driver.switch_to.alert
-            if not alert is None:
-                if not alert.text is None:
-                    is_match_auto_close_text = False
-                    for txt in default_close_alert_text:
-                        if len(txt) > 0:
-                            if txt in alert.text:
-                                is_match_auto_close_text = True
-                    #print("alert3 text:", alert.text)
+                        if is_match_auto_close_text:
+                            alert.accept()
+                            print("alert3 accepted")
 
-                    if is_match_auto_close_text:
-                        alert.accept()
-                        print("alert3 accepted")
-
-                    is_alert_popup = True
-            else:
-                print("alert3 not detected")
-        except NoAlertPresentException as exc1:
-            #logger.error('NoAlertPresentException for alert')
-            pass
-        except NoSuchWindowException:
-            #print('NoSuchWindowException2 at this url:', url )
-            #print("last_url:", last_url)
-            try:
-                window_handles_count = len(driver.window_handles)
-                if window_handles_count >= 1:
-                    driver.switch_to.window(driver.window_handles[0])
-            except Exception as excSwithFail:
+                        is_alert_popup = True
+                else:
+                    print("alert3 not detected")
+            except NoAlertPresentException:
                 pass
-        except Exception as exc:
-            logger.error('Exception2 for alert')
-            logger.error(exc, exc_info=True)
-
-        #MUST "do nothing: if alert popup.
-        #print("is_alert_popup:", is_alert_popup)
-        if is_alert_popup:
-            continue
-
-        url = ""
-        try:
-            url = driver.current_url
-        except NoSuchWindowException:
-            #print('NoSuchWindowException at this url:', url )
-            #print("last_url:", last_url)
-            try:
-                window_handles_count = len(driver.window_handles)
-                if window_handles_count >= 1:
-                    driver.switch_to.window(driver.window_handles[0])
-            except Exception as excSwithFail:
-                pass
-        except UnexpectedAlertPresentException as exc1:
-            #print('UnexpectedAlertPresentException at this url:', url )
-            #print("last_url:", last_url)
-
-            is_pass_alert = False
-            if last_url == "":
-                is_pass_alert = True
-
-            # for tixcraft verify
-            if u'tixcraft' in last_url and u'/verify/' in last_url:
-                is_pass_alert = True
-
-            if is_pass_alert:
+            except NoSuchWindowException:
                 try:
-                    driver.switch_to.alert.accept()
-                    #print('Alarm! ALARM!')
-                except NoAlertPresentException:
-                    pass
-                    #print('*crickets*')
-        except Exception as exc:
-            logger.error(exc, exc_info=True)
-
-            #UnicodeEncodeError: 'ascii' codec can't encode characters in position 63-72: ordinal not in range(128)
-            str_exc = ""
-            try:
-                str_exc = str(exc)
-            except Exception as exc2:
-                pass
-
-            if len(str_exc)==0:
-                str_exc = repr(exc)
-            
-            str_chrome_not_reachable = u'chrome not reachable'
-            
-            # for python2
-            try:
-                basestring
-                if isinstance(str_chrome_not_reachable, unicode):
-                    str_chrome_not_reachable = str(str_chrome_not_reachable)
-            except NameError:  # Python 3.x
-                basestring = str
-
-            if isinstance(str_exc, str):
-                if str_chrome_not_reachable in str_exc:
+                    window_handles = driver.window_handles
+                    if len(window_handles) >= 1:
+                        driver.switch_to.window(window_handles[0])
+                    else:
+                        print(u'quit bot')
+                        break
+                except Exception:
                     print(u'quit bot')
-                    driver.quit()
-                    import sys
-                    sys.exit()
+                    break
+            except Exception as exc:
+                if _is_driver_closed_error(exc):
+                    print(u'quit bot')
+                    break
+                logger.error('Exception2 for alert')
+                logger.error(exc, exc_info=True)
 
-            print("exc", str_exc)
-            pass
-
-        if url is None:
-            continue
-        else:
-            if len(url) == 0:
+            #MUST "do nothing: if alert popup.
+            #print("is_alert_popup:", is_alert_popup)
+            if is_alert_popup:
                 continue
 
-        #print("url", url)
-
-        '''
-        if 'kktix.com/users/sign_in' in url:
-            if len(driver.window_handles) > 1:
+            url = ""
+            try:
+                url = driver.current_url
+            except NoSuchWindowException:
                 try:
-                    # delay to swith to popup window
-                    time.sleep(1)
+                    window_handles = driver.window_handles
+                    if len(window_handles) >= 1:
+                        driver.switch_to.window(window_handles[0])
+                    else:
+                        print(u'quit bot')
+                        break
+                except Exception:
+                    print(u'quit bot')
+                    break
+            except UnexpectedAlertPresentException:
+                is_pass_alert = False
+                if last_url == "":
+                    is_pass_alert = True
 
-                    driver.switch_to_window(driver.window_handles[-1])
-                    #print("title", driver.title)
+                # for tixcraft verify
+                if u'tixcraft' in last_url and u'/verify/' in last_url:
+                    is_pass_alert = True
 
-                    url = ""
+                if is_pass_alert:
                     try:
-                        url = driver.current_url
-                    except Exception as exc:
+                        driver.switch_to.alert.accept()
+                    except NoAlertPresentException:
                         pass
+            except Exception as exc:
+                if _is_driver_closed_error(exc):
+                    print(u'quit bot')
+                    break
+                logger.error(exc, exc_info=True)
 
-                    if 'facebook.com/login' in url:
-                        if len(facebook_account) > 0:
-                            login_ret = False
-                            login_ret = facebook_login(url)
-                            if login_ret:
-                                print("back to main, after send key")
-                                driver.switch_to_default_content()
-                except Exception as exc:
-                    print(exc)
-                    pass
+            if url is None or len(url) == 0:
+                continue
 
-        '''
-
-
-        # 說明：輸出目前網址，覺得吵的話，請註解掉這行。
-        if len(url) > 0 :
+            # 說明：輸出目前網址，覺得吵的話，請註解掉這行。
             if url != last_url:
                 print(url)
             last_url = url
 
-        if 'tixcraft.com' in url:
-            if 'https://tixcraft.com/ticket/order' in url:
-                # do nothing.
-                continue
+            if 'tixcraft.com' in url:
+                if '/ticket/order' in url:
+                    # do nothing.
+                    continue
 
-            if 'https://tixcraft.com/ticket/payment' in url:
-                # do nothing.
-                continue
+                if '/ticket/payment' in url:
+                    # do nothing.
+                    continue
 
-            tixcraft_redirect(url)
+                if tixcraft_redirect(url):
+                    continue
 
-            if date_auto_select_enable:
-                date_auto_select(url)
+                if date_auto_select_enable:
+                    date_auto_select(url)
 
-            # choose area
-            if area_auto_select_enable:
-                area_auto_select(url)
+                # choose area
+                if area_auto_select_enable:
+                    area_auto_select(url)
+
+                if '/ticket/verify/' in url:
+                    tixcraft_verify(url)
+
+                # main app, to select ticket number.
+                if '/ticket/ticket/' in url:
+                    is_verifyCode_editing = tixcraft_ticket_main(url, is_verifyCode_editing)
+                else:
+                    # not is input verify code, reset flag.
+                    is_verifyCode_editing = False
+
+            # for kktix.cc and kktix.com
+            if 'kktix.c' in url:
+                if '/registrations/new' in url:
+                    answer_index = kktix_reg_new(url, answer_index)
+                else:
+                    answer_index = -1
+
+            # for famiticket
+            if 'famiticket.com' in url:
+                if 'activity_info.aspx' in url:
+                    fami_activity(url)
+
+            # for urbtix
+            # https://ticket.urbtix.hk/internet/secure/event/37348/performanceDetail
+            if 'urbtix.hk' in url:
+                # http://msg.urbtix.hk
+                if 'msg.urbtix.hk' in url:
+                    # delay to avoid ip block.
+                    time.sleep(1.1)
+                    driver.get('http://www.urbtix.hk/')
+                # http://busy.urbtix.hk
+                if 'busy.urbtix.hk' in url:
+                    # delay to avoid ip block.
+                    time.sleep(1.1)
+                    driver.get('http://www.urbtix.hk/')
+
+                if '/performanceDetail/' in url:
+                    urbtix_performance(url)
+
+            if 'cityline.com' in url:
+                if '/event.do' in url:
+                    cityline_event(url)
+
+                if '/Events.do' in url:
+                    if len(driver.window_handles) == 2:
+                        try:
+                            driver.close()
+                        except Exception:
+                            pass
+
+                if '/performance.do' in url:
+                    cityline_performance(url)
+    except KeyboardInterrupt:
+        print("Stopped by user.")
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
-            if '/ticket/verify/' in url:
-                tixcraft_verify(url)
-
-            # main app, to select ticket number.
-            if 'tixcraft.com/ticket/ticket/' in url:
-                is_verifyCode_editing = tixcraft_ticket_main(url, is_verifyCode_editing)
-            else:
-                # not is input verify code, reset flag.
-                is_verifyCode_editing = False
-
-        # for kktix.cc and kktix.com
-        if 'kktix.c' in url:
-            if '/registrations/new' in url:
-                answer_index = kktix_reg_new(url, answer_index)
-            else:
-                answer_index = -1
-
-        # for famiticket
-        if 'famiticket.com' in url:
-            if 'activity_info.aspx' in url:
-                fami_activity(url)
-
-        # for urbtix
-        # https://ticket.urbtix.hk/internet/secure/event/37348/performanceDetail
-        if 'urbtix.hk' in url:
-            # http://msg.urbtix.hk
-            if 'msg.urbtix.hk' in url:
-                # delay to avoid ip block.
-                time.sleep(1.1)
-                driver.get('http://www.urbtix.hk/')
-            # http://busy.urbtix.hk
-            if 'busy.urbtix.hk' in url:
-                # delay to avoid ip block.
-                time.sleep(1.1)
-                driver.get('http://www.urbtix.hk/')
-
-            if '/performanceDetail/' in url:
-                urbtix_performance(url)
-
-        if 'cityline.com' in url:
-            if '/event.do' in url:
-                cityline_event(url)
-                #pass
-
-            if '/Events.do' in url:
-                if len(driver.window_handles) == 2:
-                    try:
-                        driver.close()
-                    except Exception as excCloseFail:
-                        pass
-
-
-            if '/performance.do' in url:
-                cityline_performance(url)
-
-
-
-main()
+if __name__ == "__main__":
+    main()

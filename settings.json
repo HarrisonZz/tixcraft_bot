@@ -1,1 +1,30 @@
-{"tixcraft": {"area_auto_select": {"enable": true, "mode": "random", "area_keyword": ""}, "date_auto_select": {"enable": true, "date_keyword": "", "mode": "from top to bottom"}}, "homepage1": "https://kktix.com", "homepage2": "https://tixcraft.com", "facebook_account": "", "browser1": "chrome", "browser2": "firefox", "kktix": {"auto_fill_ticket_price": "$1,500", "answer_dictionary": "", "area_keyword": "", "auto_press_next_step_button": true, "auto_fill_ticket_number": true, "area_mode": "random"}, "ticket_number": 2, "homepage": "https://tixcraft.com", "browser": "chrome"}
+{
+  "homepage": "https://tixcraft.com",
+  "homepage1": "https://kktix.com",
+  "homepage2": "https://tixcraft.com",
+  "browser": "chrome",
+  "browser1": "chrome",
+  "browser2": "firefox",
+  "ticket_number": 2,
+  "facebook_account": "",
+  "tixcraft": {
+    "date_auto_select": {
+      "enable": true,
+      "mode": "from top to bottom",
+      "date_keyword": ""
+    },
+    "area_auto_select": {
+      "enable": true,
+      "mode": "random",
+      "area_keyword": ""
+    }
+  },
+  "kktix": {
+    "auto_press_next_step_button": true,
+    "auto_fill_ticket_number": true,
+    "auto_fill_ticket_price": "$1,500",
+    "area_mode": "random",
+    "area_keyword": "",
+    "answer_dictionary": ""
+  }
+}

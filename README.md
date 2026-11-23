@@ -10,13 +10,29 @@ https://max-everyday.com/2018/03/tixcraft-bot/
 # demo
 https://youtu.be/U6xGBofx-O8
 
-# how to execute source code
-1: download chromedrive to "webdriver" folder:
-http://chromedriver.chromium.org/downloads
+# how to execute source code (Python 3 + Selenium 4)
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+2. WebDriver setup:
+- Selenium 4's built-in **Selenium Manager** automatically downloads and manages `chromedriver` / `geckodriver` when no local binary is present.
+- Optional: if you prefer a local driver binary, place `chromedriver` / `chromedriver.exe` (or `geckodriver` / `geckodriver.exe`) inside the `webdriver/` folder.
+3. Launch settings GUI or run directly:
+```bash
+python3 settings.py
+# or run directly using settings.json:
+python3 chrome_tixcraft.py
+```
 
-2: <code>pip install selenium</code>
+# verification / tests
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-3: <code>python settings.py</code>
+# scope & notes
+- This tool automates page navigation, date/area selection, ticket quantity selection, and agreement checkboxes based on `settings.json`.
+- Account login, human verification / CAPTCHA entry (`#TicketForm_verifyCode`), and order payment remain manual in the browser window.
 
 # implement introduce
 https://stackoverflow.max-everyday.com/2018/03/selenium-chrome-webdriver/
