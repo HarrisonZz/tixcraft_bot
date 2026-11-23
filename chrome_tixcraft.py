@@ -640,11 +640,51 @@ def _select_target_index(items_len, mode):
     return 0
 
 
+_diag_counts = {}
+
+
+def _date_diag(msg):
+    # Diagnostic output for the date page. The main loop runs every 0.1s, so
+    # each distinct message is printed at most 3 times to avoid flooding.
+    count = _diag_counts.get(msg, 0) + 1
+    _diag_counts[msg] = count
+    if count <= 3:
+        print("[diag]", msg)
+    elif count == 4:
+        print("[diag] (repeated, suppressing):", msg)
+
+
+def _describe_button(btn):
+    try:
+        return "tag=%s class=%r text=%r data-href=%r enabled=%s displayed=%s" % (
+            btn.tag_name,
+            btn.get_attribute("class"),
+            (btn.text or "").strip(),
+            btn.get_attribute("data-href"),
+            btn.is_enabled(),
+            btn.is_displayed(),
+        )
+    except Exception as exc:
+        return "describe fail: %s" % exc
+
+
+def _is_tixcraft_game_button(btn):
+    if not btn.is_enabled():
+        return False
+    cls = (btn.get_attribute('class') or '').split()
+    if 'search-btn' in cls:
+        return False
+    data_href = btn.get_attribute('data-href')
+    if data_href is not None and '/ticket/' not in data_href:
+        return False
+    return True
+
+
 def _find_tixcraft_game_buttons(scope):
     for selector in ('.btn-next', 'button[data-href]', 'button.btn-primary', 'a.btn-primary'):
         try:
             buttons = scope.find_elements(By.CSS_SELECTOR, selector)
-            enabled_buttons = [btn for btn in buttons if btn.is_enabled()]
+            enabled_buttons = [btn for btn in buttons if _is_tixcraft_game_button(btn)]
             if enabled_buttons:
                 return enabled_buttons
         except Exception:
@@ -695,10 +735,18 @@ def date_auto_select(url):
     if len(path_parts) >= 3 and path_parts[0] == "activity" and path_parts[1] == "game":
         clicked = False
         if len(date_keyword) == 0:
-            buttons = _find_tixcraft_game_buttons(driver)
+            game_scope = driver
+            try:
+                game_scope = driver.find_element(By.ID, 'gameList')
+            except Exception:
+                pass
+            buttons = _find_tixcraft_game_buttons(game_scope)
             target_idx = _select_target_index(len(buttons), date_auto_select_mode)
+            _date_diag("date page %s: buttons=%d target_idx=%d mode=%s" % (url, len(buttons), target_idx, date_auto_select_mode))
             if target_idx >= 0:
+                _date_diag("date target button: " + _describe_button(buttons[target_idx]))
                 clicked = _click_tixcraft_game_button(buttons[target_idx], url)
+                _date_diag("date click result: clicked=%s (url before click: %s)" % (clicked, url))
         else:
             # match keyword.
             date_list = None
@@ -725,13 +773,18 @@ def date_auto_select(url):
                                 break
 
                 target_idx = _select_target_index(len(matched_buttons), date_auto_select_mode)
+                _date_diag("date page %s: keyword=%r rows=%d matched=%d target_idx=%d" % (
+                    url, date_keyword, len(date_list) if date_list else 0, len(matched_buttons), target_idx))
                 if target_idx >= 0:
+                    _date_diag("date target button: " + _describe_button(matched_buttons[target_idx]))
                     clicked = _click_tixcraft_game_button(matched_buttons[target_idx], url)
+                    _date_diag("date click result: clicked=%s (url before click: %s)" % (clicked, url))
 
         if clicked:
             return True
 
         # auto refresh for date list page when no target button is available yet.
+        _date_diag("date page: no clickable target, refreshing (url=%s)" % url)
         try:
             time.sleep(0.3)
             driver.refresh()
@@ -816,11 +869,16 @@ def area_auto_select(url):
                     print("click area a link fail, start to retry...")
                     time.sleep(0.2)
                     try:
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", area_target)
                         area_target.click()
                         return True
                     except Exception as exc2:
-                        print("click area a link fail, after retry still fail.")
-                        print(exc2)
+                        try:
+                            driver.execute_script("arguments[0].click();", area_target)
+                            return True
+                        except Exception as exc3:
+                            print("click area a link fail, after retry still fail.")
+                            print(exc3)
 
             # auto refresh for area list page.
             if is_need_refresh:

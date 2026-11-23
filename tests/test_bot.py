@@ -61,6 +61,9 @@ class MockTicketingHandler(http.server.BaseHTTPRequestHandler):
             self._send_html(
                 """
                 <html><body>
+                  <header>
+                    <button class="search-btn" data-href="/activity" onclick="window.location=this.getAttribute('data-href')"></button>
+                  </header>
                   <div id="gameList">
                     <div class="table-wrap">
                       <table>
@@ -303,6 +306,13 @@ class SeleniumIntegrationTests(unittest.TestCase):
         self.driver.get(f"{self.base_url}/activity/game/26_demo")
         self.assertTrue(bot.date_auto_select(self.driver.current_url))
         self.assertTrue(self.driver.current_url.endswith("/ticket/area/26_demo/2"))
+
+        # Modern button[data-href] without keyword must ignore header search-btn
+        bot.date_keyword = ""
+        bot.date_auto_select_mode = bot.CONST_FROM_TOP_TO_BOTTOM
+        self.driver.get(f"{self.base_url}/activity/game/26_modern")
+        self.assertTrue(bot.date_auto_select(self.driver.current_url))
+        self.assertTrue(self.driver.current_url.endswith("/ticket/area/26_modern/10"))
 
         # Modern button[data-href] + keyword matching
         bot.date_keyword = "2026/12/11"
