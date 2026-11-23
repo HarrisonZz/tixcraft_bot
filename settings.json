@@ -15,10 +15,12 @@
     },
     "area_auto_select": {
       "enable": true,
-      "mode": "random",
+      "mode": "from top to bottom",
       "area_keyword": ""
     },
-    "captcha_assist": false,
+    "captcha_assist": true,
+    "captcha_auto_ocr": true,
+    "auto_press_confirm_button": true,
     "captcha_prompt_timeout_s": 60,
     "captcha_max_retries": 3
   },

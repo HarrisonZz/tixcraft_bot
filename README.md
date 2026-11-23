@@ -34,11 +34,16 @@ python3 -m unittest discover -s tests -v
 - This tool automates page navigation, date/area selection, ticket quantity selection, and agreement checkboxes based on `settings.json`.
 - Account login, order confirmation, and payment remain manual in the browser window.
 - When `tixcraft.captcha_assist` is enabled, the app enlarges and shows the CAPTCHA image in a small Tk window. The user still reads and types the code, and the app only copies that code into `#TicketForm_verifyCode`; it never submits the order form.
+- When `tixcraft.captcha_auto_ocr` is enabled, the app first tries to recognize the code locally with `ddddocr` (offline, no API key) and fills it automatically; if recognition fails it falls back to the manual prompt when `captcha_assist` is also enabled.
+- When `tixcraft.auto_press_confirm_button` is enabled, the app clicks the "確認張數" (confirm quantity) button once the quantity, agreement checkbox, and verification code have been filled.
 - CAPTCHA assist settings:
-  - `captcha_assist`: opt in to the prompt (default: `false`).
+  - `captcha_assist`: opt in to the manual prompt (default: `false`).
+  - `captcha_auto_ocr`: opt in to local OCR recognition (default: `false`).
+  - `auto_press_confirm_button`: opt in to auto-clicking the confirm quantity button (default: `false`).
   - `captcha_prompt_timeout_s`: seconds before each prompt closes (default: `60`).
-  - `captcha_max_retries`: maximum capture/prompt/fill attempts (default: `3`).
+  - `captcha_max_retries`: maximum capture/recognize/fill attempts (default: `3`).
 - The graphical prompt requires Tkinter and Pillow. If Tk is unavailable, the app temporarily saves the image and prompts in the terminal with the same timeout.
+- Local OCR requires the `ddddocr` package (install with `pip install ddddocr`).
 
 # implement introduce
 https://stackoverflow.max-everyday.com/2018/03/selenium-chrome-webdriver/

@@ -7,6 +7,7 @@ import socketserver
 import tempfile
 import threading
 import unittest
+from unittest.mock import MagicMock, patch
 
 import chrome_tixcraft as bot
 import settings
@@ -131,6 +132,7 @@ class MockTicketingHandler(http.server.BaseHTTPRequestHandler):
                     </select>
                     <input type="checkbox" id="TicketForm_agree" />
                     <input type="text" id="TicketForm_verifyCode" />
+                    <button id="TicketForm_submit" type="button" onclick="document.body.setAttribute('data-confirmed','1')">確認張數</button>
                   </form>
                 </body></html>
                 """
@@ -264,6 +266,19 @@ class UnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bot.create_driver("safari")
 
+    def test_tixcraft_press_confirm_button_text_fallback(self):
+        fake_button = MagicMock()
+        fake_button.text = "確認張數"
+        fake_button.is_enabled.return_value = True
+        fake_driver = MagicMock()
+        fake_driver.find_element.side_effect = Exception("not found")
+        fake_driver.find_elements.return_value = [fake_button]
+
+        with patch.object(bot, "driver", fake_driver):
+            self.assertTrue(bot.tixcraft_press_confirm_button())
+
+        fake_button.click.assert_called_once()
+
 
 class SeleniumIntegrationTests(unittest.TestCase):
     @classmethod
@@ -338,6 +353,7 @@ class SeleniumIntegrationTests(unittest.TestCase):
         self.assertGreater(MockTicketingHandler.refresh_hits, hits_before)
 
     def test_tixcraft_ticket_fill_agree_and_focus_verify_code(self):
+        bot.auto_press_confirm_button_enabled = False
         bot.ticket_number = "2"
         self.driver.get(f"{self.base_url}/ticket/ticket/26_demo/a1")
         editing = bot.tixcraft_ticket_main(self.driver.current_url, False)
@@ -368,6 +384,15 @@ class SeleniumIntegrationTests(unittest.TestCase):
         self.assertTrue(
             self.driver.execute_script('return document.getElementById("TicketForm_agree").checked;')
         )
+
+    def test_tixcraft_ticket_main_auto_presses_confirm_button(self):
+        bot.auto_press_confirm_button_enabled = True
+        bot.ticket_number = "2"
+        self.driver.get(f"{self.base_url}/ticket/ticket/26_demo/a1")
+        editing = bot.tixcraft_ticket_main(self.driver.current_url, False)
+        self.assertTrue(editing)
+        confirmed = self.driver.execute_script("return document.body.getAttribute('data-confirmed');")
+        self.assertEqual(confirmed, "1")
 
     def test_fami_bottom_to_top(self):
         bot.date_keyword = ""

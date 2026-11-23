@@ -62,6 +62,8 @@ def get_default_config():
                 "area_keyword": "",
             },
             "captcha_assist": False,
+            "captcha_auto_ocr": False,
+            "auto_press_confirm_button": False,
             "captcha_prompt_timeout_s": 60,
             "captcha_max_retries": 3,
         },
@@ -123,6 +125,8 @@ def btn_save_act(slience_mode=False):
         global chk_state_area_auto_select
         global txt_area_keyword
         global chk_state_captcha_assist
+        global chk_state_captcha_auto_ocr
+        global chk_state_auto_press_confirm_button
         global txt_captcha_prompt_timeout_s
         global txt_captcha_max_retries
 
@@ -189,6 +193,8 @@ def btn_save_act(slience_mode=False):
                 if prompt_timeout_s <= 0 or max_retries <= 0:
                     raise ValueError("CAPTCHA values must be positive")
                 config_dict["tixcraft"]["captcha_assist"] = bool(chk_state_captcha_assist.get())
+                config_dict["tixcraft"]["captcha_auto_ocr"] = bool(chk_state_captcha_auto_ocr.get())
+                config_dict["tixcraft"]["auto_press_confirm_button"] = bool(chk_state_auto_press_confirm_button.get())
                 config_dict["tixcraft"]["captcha_prompt_timeout_s"] = prompt_timeout_s
                 config_dict["tixcraft"]["captcha_max_retries"] = max_retries
             except ValueError:
@@ -393,6 +399,8 @@ def MainMenu(root):
     area_keyword = ""
 
     captcha_assist = False
+    captcha_auto_ocr = False
+    auto_press_confirm_button = False
     captcha_prompt_timeout_s = 60
     captcha_max_retries = 3
 
@@ -461,6 +469,8 @@ def MainMenu(root):
                 area_keyword = area_keyword.strip()
 
             captcha_assist = bool(config_dict["tixcraft"].get("captcha_assist", False))
+            captcha_auto_ocr = bool(config_dict["tixcraft"].get("captcha_auto_ocr", False))
+            auto_press_confirm_button = bool(config_dict["tixcraft"].get("auto_press_confirm_button", False))
             captcha_prompt_timeout_s = config_dict["tixcraft"].get("captcha_prompt_timeout_s", 60)
             captcha_max_retries = config_dict["tixcraft"].get("captcha_max_retries", 3)
 
@@ -740,6 +750,28 @@ def MainMenu(root):
     chk_state_captcha_assist.set(captcha_assist)
     chk_captcha_assist = Checkbutton(frame_group_tixcraft, text="Enable", variable=chk_state_captcha_assist)
     chk_captcha_assist.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_captcha_auto_ocr = Label(frame_group_tixcraft, text="CAPTCHA Auto OCR")
+    lbl_captcha_auto_ocr.grid(column=0, row=group_row_count, sticky = E)
+
+    global chk_state_captcha_auto_ocr
+    chk_state_captcha_auto_ocr = BooleanVar()
+    chk_state_captcha_auto_ocr.set(captcha_auto_ocr)
+    chk_captcha_auto_ocr = Checkbutton(frame_group_tixcraft, text="Enable", variable=chk_state_captcha_auto_ocr)
+    chk_captcha_auto_ocr.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_auto_press_confirm_button = Label(frame_group_tixcraft, text="Auto Press Confirm Button")
+    lbl_auto_press_confirm_button.grid(column=0, row=group_row_count, sticky = E)
+
+    global chk_state_auto_press_confirm_button
+    chk_state_auto_press_confirm_button = BooleanVar()
+    chk_state_auto_press_confirm_button.set(auto_press_confirm_button)
+    chk_auto_press_confirm_button = Checkbutton(frame_group_tixcraft, text="Enable", variable=chk_state_auto_press_confirm_button)
+    chk_auto_press_confirm_button.grid(column=1, row=group_row_count, sticky = W)
 
     group_row_count+=1
 

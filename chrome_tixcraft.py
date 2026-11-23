@@ -86,8 +86,10 @@ area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 area_keyword = ""
 
 captcha_assist_enabled = False
+captcha_auto_ocr_enabled = False
 captcha_prompt_timeout_s = 60
 captcha_max_retries = 3
+auto_press_confirm_button_enabled = False
 
 kktix_area_auto_select_mode = CONST_SELECT_ORDER_DEFAULT
 kktix_area_keyword = ""
@@ -102,7 +104,8 @@ def load_config(filepath=None):
     global auto_press_next_step_button, auto_fill_ticket_number
     global date_auto_select_enable, date_auto_select_mode, date_keyword
     global area_auto_select_enable, area_auto_select_mode, area_keyword
-    global captcha_assist_enabled, captcha_prompt_timeout_s, captcha_max_retries
+    global captcha_assist_enabled, captcha_prompt_timeout_s, captcha_max_retries, captcha_auto_ocr_enabled
+    global auto_press_confirm_button_enabled
     global kktix_area_auto_select_mode, kktix_area_keyword
     global kktix_answer_dictionary, kktix_answer_dictionary_list
 
@@ -169,8 +172,10 @@ def load_config(filepath=None):
     date_keyword = ""
     area_keyword = ""
     captcha_assist_enabled = False
+    captcha_auto_ocr_enabled = False
     captcha_prompt_timeout_s = 60
     captcha_max_retries = 3
+    auto_press_confirm_button_enabled = False
     if 'tixcraft' in config_dict:
         date_cfg = config_dict["tixcraft"].get("date_auto_select", {})
         date_auto_select_enable = bool(date_cfg.get("enable", True))
@@ -193,6 +198,8 @@ def load_config(filepath=None):
             area_keyword = str(area_cfg["area_keyword"]).strip()
 
         captcha_assist_enabled = bool(config_dict["tixcraft"].get("captcha_assist", False))
+        captcha_auto_ocr_enabled = bool(config_dict["tixcraft"].get("captcha_auto_ocr", False))
+        auto_press_confirm_button_enabled = bool(config_dict["tixcraft"].get("auto_press_confirm_button", False))
         try:
             captcha_prompt_timeout_s = max(int(config_dict["tixcraft"].get("captcha_prompt_timeout_s", 60)), 1)
         except (TypeError, ValueError):
@@ -1070,7 +1077,7 @@ def tixcraft_verify(url):
 
 
 def _run_captcha_assist(driver_instance):
-    if not captcha_assist_enabled:
+    if not (captcha_assist_enabled or captcha_auto_ocr_enabled):
         return None
 
     # Any failure must fall back to manual entry; never abort the purchase loop.
@@ -1078,11 +1085,74 @@ def _run_captcha_assist(driver_instance):
         assist = CaptchaAssist(
             timeout_s=captcha_prompt_timeout_s,
             max_retries=captcha_max_retries,
+            auto_ocr=captcha_auto_ocr_enabled,
+            prompt_enabled=captcha_assist_enabled,
         )
         return assist.run(driver_instance)
     except Exception as exc:
         print("CAPTCHA assist failed: %s" % exc)
         return None
+
+
+CONFIRM_TICKET_BUTTON_SELECTORS = (
+    "#TicketForm_submit",
+    '#TicketForm button[type="submit"]',
+    '#TicketForm input[type="submit"]',
+    "#TicketForm button.btn-primary",
+    "#TicketForm a.btn-primary",
+    "#TicketForm .btn-primary",
+)
+CONFIRM_TICKET_BUTTON_TEXTS = ("確認張數", "確認", "下一步", "送出", "立即訂購")
+
+
+def _click_confirm_button_element(el):
+    try:
+        el.click()
+        return True
+    except Exception:
+        pass
+    try:
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();",
+            el,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def tixcraft_press_confirm_button():
+    """Find and click the tixCraft '確認張數' (confirm quantity) button."""
+    ret = False
+
+    # 1) Try known selectors first.
+    for selector in CONFIRM_TICKET_BUTTON_SELECTORS:
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        if el is not None and el.is_enabled() and _click_confirm_button_element(el):
+            ret = True
+            break
+
+    # 2) Fall back to matching the button by its visible text.
+    if not ret:
+        try:
+            candidates = driver.find_elements(By.CSS_SELECTOR, 'button, a.btn, input[type="submit"]')
+            for el in candidates:
+                try:
+                    text = (el.text or "").strip()
+                    if text in CONFIRM_TICKET_BUTTON_TEXTS and el.is_enabled() and _click_confirm_button_element(el):
+                        ret = True
+                        break
+                except Exception:
+                    continue
+        except Exception as exc:
+            print("find confirm ticket button fail:", exc)
+
+    if not ret:
+        print("confirm ticket quantity button not found")
+    return ret
 
 
 def tixcraft_ticket_main(url, is_verifyCode_editing):
@@ -1110,9 +1180,9 @@ def tixcraft_ticket_main(url, is_verifyCode_editing):
     if is_verifyCode_editing == False:
         ticket_number_auto_fill(url, form_select)
 
-        # Opt-in only. The order form is never submitted here: the user still
-        # reviews the filled code and confirms the order and payment.
-        if captcha_assist_enabled:
+        # Opt-in only. By default the order form is never submitted here: the
+        # user still reviews the filled code and confirms the order and payment.
+        if captcha_assist_enabled or captcha_auto_ocr_enabled:
             if not _run_captcha_assist(driver):
                 print("CAPTCHA assist did not fill the code; continuing with manual entry")
 
@@ -1126,6 +1196,12 @@ def tixcraft_ticket_main(url, is_verifyCode_editing):
             print("goto is_verifyCode_editing== True")
         except Exception as exc:
             print(exc)
+
+        # Optionally auto-press the "確認張數" (confirm quantity) button once
+        # the quantity, agreement and verification code have been filled.
+        if auto_press_confirm_button_enabled:
+            if tixcraft_press_confirm_button():
+                print("pressed confirm ticket quantity button")
     else:
         #print("is_verifyCode_editing")
         # do nothing here.

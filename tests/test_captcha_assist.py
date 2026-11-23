@@ -144,7 +144,7 @@ class CaptchaAssistTests(unittest.TestCase):
         selected_option.get_attribute.return_value = "0"
         select_class.return_value.first_selected_option = selected_option
 
-        with patch.object(bot, "driver", driver), patch.object(bot, "captcha_assist_enabled", True):
+        with patch.object(bot, "driver", driver), patch.object(bot, "captcha_assist_enabled", True), patch.object(bot, "auto_press_confirm_button_enabled", False):
             self.assertTrue(bot.tixcraft_ticket_main("https://tixcraft.com/ticket/ticket/demo", False))
 
         ticket_fill.assert_called_once_with("https://tixcraft.com/ticket/ticket/demo", form_select)
@@ -152,9 +152,63 @@ class CaptchaAssistTests(unittest.TestCase):
 
     @patch("chrome_tixcraft.CaptchaAssist")
     def test_feature_is_skipped_when_disabled(self, assist_class):
-        with patch.object(bot, "captcha_assist_enabled", False):
+        with patch.object(bot, "captcha_assist_enabled", False), patch.object(bot, "captcha_auto_ocr_enabled", False):
             self.assertIsNone(bot._run_captcha_assist(MagicMock()))
         assist_class.assert_not_called()
+
+    def test_normalize_code_filters_and_preserves_case(self):
+        self.assertEqual(captcha_assist._normalize_code("  aB12 "), "aB12")
+        self.assertEqual(captcha_assist._normalize_code("A1b2C3"), "A1b2C3")
+        self.assertIsNone(captcha_assist._normalize_code("abc"))
+        self.assertIsNone(captcha_assist._normalize_code("abcdefg"))
+        self.assertIsNone(captcha_assist._normalize_code(""))
+        self.assertIsNone(captcha_assist._normalize_code(None))
+
+    def test_recognize_captcha_returns_normalized_code(self):
+        engine = MagicMock()
+        engine.classification.return_value = "aB12"
+
+        self.assertEqual(captcha_assist.recognize_captcha(b"image", engine=engine), "aB12")
+
+    def test_recognize_captcha_tries_variants_until_valid(self):
+        engine = MagicMock()
+        engine.classification.side_effect = ["??", "aB12"]
+
+        with patch("captcha_assist._preprocess_variants", return_value=[b"v1", b"v2"]):
+            self.assertEqual(captcha_assist.recognize_captcha(b"image", engine=engine), "aB12")
+        self.assertEqual(engine.classification.call_count, 2)
+
+    def test_recognize_captcha_returns_none_when_engine_missing(self):
+        with patch("captcha_assist._get_ocr_engine", return_value=(None, RuntimeError("no ddddocr"))):
+            self.assertIsNone(captcha_assist.recognize_captcha(b"image"))
+
+    def test_recognize_captcha_returns_none_when_all_variants_invalid(self):
+        engine = MagicMock()
+        engine.classification.side_effect = ["!!!", "???"]
+        with patch("captcha_assist._preprocess_variants", return_value=[b"v1", b"v2"]):
+            self.assertIsNone(captcha_assist.recognize_captcha(b"image", engine=engine))
+
+    @patch("captcha_assist.fill_captcha", return_value=True)
+    @patch("captcha_assist.prompt_user_for_code")
+    @patch("captcha_assist.recognize_captcha", return_value="AB12")
+    @patch("captcha_assist.capture_captcha_image", return_value=b"image")
+    def test_run_uses_ocr_without_prompting_when_recognized(self, capture, recognize, prompt, fill):
+        assist = captcha_assist.CaptchaAssist(timeout_s=10, max_retries=3, auto_ocr=True, prompt_enabled=True)
+
+        self.assertTrue(assist.run(MagicMock()))
+        recognize.assert_called_once_with(b"image")
+        prompt.assert_not_called()
+        fill.assert_called_once()
+
+    @patch("captcha_assist.fill_captcha", return_value=True)
+    @patch("captcha_assist.prompt_user_for_code", return_value="MANUAL")
+    @patch("captcha_assist.recognize_captcha", return_value=None)
+    @patch("captcha_assist.capture_captcha_image", return_value=b"image")
+    def test_run_falls_back_to_prompt_when_ocr_fails(self, capture, recognize, prompt, fill):
+        assist = captcha_assist.CaptchaAssist(timeout_s=10, max_retries=3, auto_ocr=True, prompt_enabled=True)
+
+        self.assertTrue(assist.run(MagicMock()))
+        prompt.assert_called_once_with(b"image", 10)
 
 
 if __name__ == "__main__":

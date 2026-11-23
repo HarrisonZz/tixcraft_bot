@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # encoding=utf-8
-"""Human-in-the-loop assistance for tixCraft image verification codes."""
+"""Local-OCR and human-in-the-loop assistance for tixCraft image verification codes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import base64
 from io import BytesIO
 import logging
 import os
+import re
 import select
 import sys
 import tempfile
@@ -31,6 +32,9 @@ CAPTCHA_IMAGE_SELECTORS = (
 )
 VERIFY_CODE_SELECTOR = "#TicketForm_verifyCode"
 RETRY_DELAY_S = 0.25
+CAPTCHA_CODE_MIN_LENGTH = 4
+CAPTCHA_CODE_MAX_LENGTH = 6
+CAPTCHA_CODE_PATTERN = re.compile(r"^[A-Za-z0-9]+$")
 
 
 def capture_captcha_image(driver) -> Optional[bytes]:
@@ -71,6 +75,101 @@ def capture_captcha_image(driver) -> Optional[bytes]:
             logger.warning("Unable to capture CAPTCHA image matched by %s: %s", selector, exc)
 
     logger.warning("No usable CAPTCHA image element was found")
+    return None
+
+
+_ocr_engine = None
+_ocr_engine_error = None
+
+
+def _get_ocr_engine():
+    """Return a lazily-created ddddocr engine together with any init error."""
+    global _ocr_engine, _ocr_engine_error
+    if _ocr_engine is None and _ocr_engine_error is None:
+        try:
+            import ddddocr
+        except Exception as exc:
+            _ocr_engine_error = exc
+            logger.warning(
+                "ddddocr is not installed; automatic CAPTCHA recognition is unavailable: %s",
+                exc,
+            )
+            return _ocr_engine, _ocr_engine_error
+
+        try:
+            _ocr_engine = ddddocr.DdddOcr(show_ad=False)
+        except TypeError:
+            # Older ddddocr releases do not accept ``show_ad``.
+            _ocr_engine = ddddocr.DdddOcr()
+        except Exception as exc:
+            _ocr_engine_error = exc
+            logger.warning("Unable to initialize ddddocr: %s", exc)
+
+    return _ocr_engine, _ocr_engine_error
+
+
+def _preprocess_variants(image_bytes: bytes):
+    """Yield candidate image byte strings, from the raw capture to enhanced."""
+    yield image_bytes
+
+    try:
+        from PIL import Image, ImageOps
+
+        source = Image.open(BytesIO(image_bytes)).convert("RGB")
+    except Exception:
+        return
+
+    resampling = getattr(Image, "Resampling", Image)
+    gray = ImageOps.autocontrast(source.convert("L"))
+    buffer = BytesIO()
+    gray.save(buffer, format="PNG")
+    yield buffer.getvalue()
+
+    upscaled = gray.resize((gray.width * 3, gray.height * 3), resampling.LANCZOS)
+    buffer = BytesIO()
+    upscaled.save(buffer, format="PNG")
+    yield buffer.getvalue()
+
+
+def _normalize_code(raw_text) -> Optional[str]:
+    """Validate and normalize an OCR result into a tixCraft-style code.
+
+    tixCraft verification codes are case-sensitive, so the recognized case is
+    preserved exactly; only whitespace and non-alphanumeric noise are removed.
+    """
+    if not isinstance(raw_text, str):
+        return None
+    code = re.sub(r"[^A-Za-z0-9]", "", raw_text.strip())
+    if not (CAPTCHA_CODE_MIN_LENGTH <= len(code) <= CAPTCHA_CODE_MAX_LENGTH):
+        return None
+    return code
+
+
+def recognize_captcha(image_bytes: bytes, engine=None) -> Optional[str]:
+    """Recognize a tixCraft CAPTCHA image using local ddddocr OCR.
+
+    Returns a normalized code or None when no plausible code can be read.
+    ``engine`` is injectable for tests; when omitted a process-wide ddddocr
+    engine is created lazily on first use.
+    """
+    if not image_bytes:
+        return None
+
+    if engine is None:
+        engine, error = _get_ocr_engine()
+        if error is not None or engine is None:
+            return None
+
+    for variant in _preprocess_variants(image_bytes):
+        try:
+            raw_text = engine.classification(variant)
+        except Exception as exc:
+            logger.warning("CAPTCHA OCR classification failed: %s", exc)
+            continue
+        code = _normalize_code(raw_text)
+        if code:
+            return code
+
     return None
 
 
@@ -247,21 +346,27 @@ def fill_captcha(driver, code: str) -> bool:
 
 
 class CaptchaAssist:
-    """Coordinate CAPTCHA capture, human entry, and input filling."""
+    """Coordinate CAPTCHA capture, OCR/human recognition, and input filling."""
 
-    def __init__(self, timeout_s: int = 60, max_retries: int = 3):
+    def __init__(self, timeout_s: int = 60, max_retries: int = 3,
+                 auto_ocr: bool = False, prompt_enabled: bool = True):
         self.timeout_s = max(int(timeout_s), 1)
         self.max_retries = max(int(max_retries), 1)
+        self.auto_ocr = bool(auto_ocr)
+        self.prompt_enabled = bool(prompt_enabled)
 
     def run(self, driver) -> bool:
-        """Chain capture, prompt and fill, retrying transient failures.
+        """Chain capture, recognition and fill, retrying transient failures.
 
         Each attempt re-captures the image so a replaced DOM element is never
-        reused. Returns True once the input holds the code the user typed; it
-        does not validate the code with the site. Returns False if the user
-        cancels or the prompt times out, or after the last capture/fill failure,
-        so the caller can hand control back to the user. The order form is
-        never submitted here.
+        reused. When ``auto_ocr`` is enabled, local OCR runs first and its code
+        is filled automatically; when that fails and ``prompt_enabled`` is on,
+        the image is shown to the user as a fallback.
+
+        Returns True once the input holds a code; it does not validate the code
+        with the site. Returns False if the user cancels or the prompt times
+        out, or after the last capture/fill failure, so the caller can hand
+        control back to the user. The order form is never submitted here.
         """
         for attempt in range(1, self.max_retries + 1):
             image_bytes = capture_captcha_image(driver)
@@ -271,14 +376,26 @@ class CaptchaAssist:
                     time.sleep(RETRY_DELAY_S)
                 continue
 
-            code = prompt_user_for_code(image_bytes, self.timeout_s)
-            if code is None:
-                logger.info("CAPTCHA attempt %d/%d: no code entered; stopping", attempt, self.max_retries)
-                return False
+            if self.auto_ocr:
+                code = recognize_captcha(image_bytes)
+                if code:
+                    logger.info("CAPTCHA attempt %d/%d: OCR recognized '%s'", attempt, self.max_retries, code)
+                    if fill_captcha(driver, code):
+                        return True
+                    logger.warning("CAPTCHA attempt %d/%d: OCR code '%s' did not fill", attempt, self.max_retries, code)
+                else:
+                    logger.info("CAPTCHA attempt %d/%d: OCR produced no valid code", attempt, self.max_retries)
 
-            if fill_captcha(driver, code):
-                return True
-            logger.warning("CAPTCHA attempt %d/%d: input value did not match", attempt, self.max_retries)
+            if self.prompt_enabled:
+                code = prompt_user_for_code(image_bytes, self.timeout_s)
+                if code is None:
+                    logger.info("CAPTCHA attempt %d/%d: no code entered; stopping", attempt, self.max_retries)
+                    return False
+
+                if fill_captcha(driver, code):
+                    return True
+                logger.warning("CAPTCHA attempt %d/%d: input value did not match", attempt, self.max_retries)
+
             if attempt < self.max_retries:
                 time.sleep(RETRY_DELAY_S)
 
