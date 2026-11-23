@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import ElementClickInterceptedException, NoSuchElementException
 
 import captcha_assist
 import chrome_tixcraft as bot
@@ -85,6 +85,22 @@ class CaptchaAssistTests(unittest.TestCase):
         self.assertTrue(captcha_assist.fill_captcha(driver, "AB12"))
         verify_input.clear.assert_called_once_with()
         verify_input.send_keys.assert_called_once_with("AB12")
+
+    def test_capture_prefers_canvas_data_url_when_available(self):
+        driver = MagicMock()
+        driver.execute_script.return_value = "data:image/png;base64,cG5nLWNhbnZhcw=="
+
+        self.assertEqual(captcha_assist.capture_captcha_image(driver), b"png-canvas")
+        driver.execute_script.assert_called_once()
+
+    def test_fill_falls_back_to_js_when_click_intercepted(self):
+        driver = MagicMock()
+        verify_input = driver.find_element.return_value
+        verify_input.click.side_effect = ElementClickInterceptedException("banner overlay")
+        verify_input.get_attribute.return_value = "AB12"
+
+        self.assertTrue(captcha_assist.fill_captcha(driver, "AB12"))
+        driver.execute_script.assert_called_once()
 
     def test_fill_returns_false_when_value_differs(self):
         driver = MagicMock()

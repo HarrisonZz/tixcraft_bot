@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 from io import BytesIO
 import logging
 import os
@@ -37,10 +38,27 @@ def capture_captcha_image(driver) -> Optional[bytes]:
     for selector in CAPTCHA_IMAGE_SELECTORS:
         try:
             image_element = driver.find_element(By.CSS_SELECTOR, selector)
-            driver.execute_script(
-                'arguments[0].scrollIntoView({block: "center", inline: "center"});',
+            # Scroll above bottom overlays and prefer direct canvas pixel readback
+            # so floating banners (e.g. cookie notices) cannot obscure the image.
+            data_url = driver.execute_script(
+                'var img = arguments[0];'
+                'img.scrollIntoView({block: "start", inline: "center"});'
+                'try {'
+                '  if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {'
+                '    var c = document.createElement("canvas");'
+                '    c.width = img.naturalWidth;'
+                '    c.height = img.naturalHeight;'
+                '    c.getContext("2d").drawImage(img, 0, 0);'
+                '    return c.toDataURL("image/png");'
+                '  }'
+                '} catch (e) {}'
+                'return null;',
                 image_element,
             )
+            if isinstance(data_url, str) and data_url.startswith("data:image/png;base64,"):
+                image_bytes = base64.b64decode(data_url.split(",", 1)[1])
+                if image_bytes:
+                    return image_bytes
             image_bytes = image_element.screenshot_as_png
             if image_bytes:
                 return image_bytes
@@ -206,9 +224,22 @@ def fill_captcha(driver, code: str) -> bool:
 
     try:
         verify_input = driver.find_element(By.CSS_SELECTOR, VERIFY_CODE_SELECTOR)
-        verify_input.click()
-        verify_input.clear()
-        verify_input.send_keys(code)
+        try:
+            verify_input.click()
+            verify_input.clear()
+            verify_input.send_keys(code)
+        except WebDriverException:
+            # Fall back to JS when overlays (e.g. cookie banners) intercept clicks.
+            driver.execute_script(
+                'var el = arguments[0], val = arguments[1];'
+                'el.scrollIntoView({block: "center", inline: "center"});'
+                'el.focus();'
+                'el.value = val;'
+                'el.dispatchEvent(new Event("input", {bubbles: true}));'
+                'el.dispatchEvent(new Event("change", {bubbles: true}));',
+                verify_input,
+                code,
+            )
         return verify_input.get_attribute("value") == code
     except (NoSuchElementException, StaleElementReferenceException, WebDriverException) as exc:
         logger.warning("Unable to fill CAPTCHA input: %s", exc)
