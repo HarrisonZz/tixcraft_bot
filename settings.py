@@ -16,7 +16,12 @@ import os
 import sys
 import json
 import platform
+import shutil
+import socket
 import subprocess
+
+DEFAULT_DEBUG_ADDRESS = "127.0.0.1:9222"
+DEFAULT_CHROME_PROFILE_DIRNAME = "tixcraft-chrome-profile"
 
 CONST_APP_VERSION = u"MaxBot (2019.09.24-py3-sel4)"
 
@@ -258,6 +263,111 @@ def update_pause_ui(paused=None):
         )
 
 
+def parse_debug_address(addr):
+    text = (addr or "").strip()
+    if ":" in text:
+        host, port_str = text.rsplit(":", 1)
+        host = host.strip() or "127.0.0.1"
+        try:
+            port = int(port_str.strip())
+            if 1 <= port <= 65535:
+                return host, port
+        except ValueError:
+            pass
+    return "127.0.0.1", 9222
+
+
+def is_debug_port_open(addr=DEFAULT_DEBUG_ADDRESS, timeout=0.25):
+    host, port = parse_debug_address(addr)
+    try:
+        conn = socket.create_connection((host, port), timeout=timeout)
+        conn.close()
+        return True
+    except OSError:
+        return False
+
+
+def find_chrome_executable(system_name=None):
+    sys_name = system_name or platform.system()
+    candidates = []
+    if sys_name == "Windows":
+        for env_key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = os.environ.get(env_key)
+            if base:
+                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        for cmd in ("chrome.exe", "chrome"):
+            found = shutil.which(cmd)
+            if found:
+                candidates.append(found)
+    elif sys_name == "Darwin":
+        candidates.extend([
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ])
+        for cmd in ("Google Chrome", "google-chrome"):
+            found = shutil.which(cmd)
+            if found:
+                candidates.append(found)
+    else:
+        for cmd in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+            found = shutil.which(cmd)
+            if found:
+                candidates.append(found)
+
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def launch_debug_chrome(target_url, debug_address=DEFAULT_DEBUG_ADDRESS, profile_dir=None):
+    chrome_bin = find_chrome_executable()
+    if not chrome_bin:
+        raise FileNotFoundError("Google Chrome executable not found.")
+    _, port = parse_debug_address(debug_address)
+    user_data_dir = profile_dir or os.path.join(os.path.expanduser("~"), DEFAULT_CHROME_PROFILE_DIRNAME)
+    url = (target_url or "").strip() or "https://tixcraft.com"
+    return subprocess.Popen([
+        chrome_bin,
+        "--remote-debugging-port=%d" % port,
+        "--user-data-dir=%s" % user_data_dir,
+        url,
+    ])
+
+
+def btn_clear_debug_address_clicked():
+    if 'txt_browser_debug_address_value' in globals() and txt_browser_debug_address_value is not None:
+        txt_browser_debug_address_value.set("")
+
+
+def btn_open_browser_clicked():
+    set_bot_paused(True)
+    update_pause_ui(True)
+
+    if 'combo_browser' in globals() and combo_browser is not None:
+        combo_browser.set("chrome")
+
+    addr = DEFAULT_DEBUG_ADDRESS
+    if 'txt_browser_debug_address' in globals() and txt_browser_debug_address is not None:
+        current = txt_browser_debug_address.get().strip()
+        addr = current if current else DEFAULT_DEBUG_ADDRESS
+    if 'txt_browser_debug_address_value' in globals() and txt_browser_debug_address_value is not None:
+        txt_browser_debug_address_value.set(addr)
+
+    btn_save_act(slience_mode=True)
+
+    target_url = "https://tixcraft.com"
+    if 'combo_homepage' in globals() and combo_homepage is not None:
+        selected = combo_homepage.get().strip()
+        if selected:
+            target_url = selected
+
+    try:
+        launch_debug_chrome(target_url, debug_address=addr)
+    except Exception as exc:
+        messagebox.showerror("Open Browser Error", str(exc))
+
+
 def btn_pause_clicked():
     paused = toggle_bot_paused()
     update_pause_ui(paused)
@@ -283,11 +393,24 @@ def btn_exit_clicked():
     set_bot_paused(False)
     root.destroy()
 
+
+def resize_root_to_fit():
+    if 'root' in globals() and root is not None:
+        root.update_idletasks()
+        min_width = max(500, root.winfo_reqwidth() + 24)
+        min_height = max(540, root.winfo_reqheight() + 24)
+        root.minsize(min_width, min_height)
+        root.geometry("%dx%d" % (min_width, min_height))
+
+
 def callbackHomepageOnChange(event):
+    if 'txt_browser_debug_address_value' in globals() and txt_browser_debug_address_value is not None:
+        txt_browser_debug_address_value.set("")
     showHideBlocks()
 
 def callbackDateAutoOnChange():
     showHideTixcraftBlocks()
+    resize_root_to_fit()
 
 def showHideBlocks(all_layout_visible=False):
     global UI_PADDING_X
@@ -357,7 +480,15 @@ def showHideBlocks(all_layout_visible=False):
         lbl_kktix_area_mode['text'] = ''
         lbl_kktix_answer_dictionary['text'] = ''
 
+    if 'btn_open_browser' in globals() and btn_open_browser is not None:
+        if u'kktix' in new_homepage or u'tixcraft' in new_homepage:
+            btn_open_browser.grid(column=1, row=0)
+        else:
+            btn_open_browser.grid_remove()
+
     showHideTixcraftBlocks()
+    if not all_layout_visible:
+        resize_root_to_fit()
 
 
 def showHideTixcraftBlocks():
@@ -471,7 +602,9 @@ def MainMenu(root):
 
         browser_debug_address = ""
         if 'browser_debug_address' in config_dict:
-            browser_debug_address = str(config_dict["browser_debug_address"] or "")
+            saved_debug_addr = str(config_dict["browser_debug_address"] or "").strip()
+            if saved_debug_addr and is_debug_port_open(saved_debug_addr):
+                browser_debug_address = saved_debug_addr
 
         # default ticket number
         # 說明：自動選擇的票數
@@ -613,6 +746,9 @@ def MainMenu(root):
     txt_browser_debug_address_value = StringVar(frame_group_header, value=browser_debug_address)
     txt_browser_debug_address = Entry(frame_group_header, width=24, textvariable = txt_browser_debug_address_value)
     txt_browser_debug_address.grid(column=1, row=group_row_count, sticky = W)
+
+    btn_clear_debug = ttk.Button(frame_group_header, text="Clear", width=6, command=btn_clear_debug_address_clicked)
+    btn_clear_debug.grid(column=2, row=group_row_count, sticky = W, padx=(4, 0))
 
     group_row_count+=1
 
@@ -900,15 +1036,19 @@ def MainMenu(root):
     btn_run = ttk.Button(frame_action, text="Run", command=btn_run_clicked)
     btn_run.grid(column=0, row=0)
 
+    global btn_open_browser
+    btn_open_browser = ttk.Button(frame_action, text="Open Browser", command=btn_open_browser_clicked)
+    btn_open_browser.grid(column=1, row=0)
+
     global btn_pause
     btn_pause = ttk.Button(frame_action, text="Pause", command=btn_pause_clicked)
-    btn_pause.grid(column=1, row=0)
+    btn_pause.grid(column=2, row=0)
 
     btn_save = ttk.Button(frame_action, text="Save", command=btn_save_clicked)
-    btn_save.grid(column=2, row=0)
+    btn_save.grid(column=3, row=0)
 
     btn_exit = ttk.Button(frame_action, text="Exit", command=btn_exit_clicked)
-    btn_exit.grid(column=3, row=0)
+    btn_exit.grid(column=4, row=0)
 
     frame_action.grid(column=0, row=row_count, sticky = W, padx=UI_PADDING_X)
 

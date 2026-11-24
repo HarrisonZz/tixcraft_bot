@@ -49,6 +49,8 @@ https://youtu.be/U6xGBofx-O8
 # attach to an already-open Chrome (skip the Cloudflare loop)
 If the Chrome that the bot launches keeps getting stuck on the Cloudflare challenge, you can open Chrome yourself, log in / pass Cloudflare manually, and then let the bot take over that same window:
 
+> **GUI shortcut (`settings.py`)**: Select `https://kktix.com` or `https://tixcraft.com` and click **`Open Browser`** — it automatically pauses the bot, fills `127.0.0.1:9222`, and launches Chrome with a dedicated profile. Once you finish logging in, click **`Run`** (or **`Resume`** if the bot is already running) to hand control back to the bot. Or skip `Open Browser` and click **`Run`** directly to launch a fresh browser.
+
 1. Quit the bot (and any Chrome it launched).
 2. Start Chrome from a terminal with remote debugging enabled. **You must pass a dedicated `--user-data-dir`** (modern Chrome refuses to open port `9222` on the default user profile or merges into an existing normal Chrome window):
    - **Windows (PowerShell, recommended — runs in background)**:

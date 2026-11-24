@@ -687,6 +687,53 @@ class UnitTests(unittest.TestCase):
             settings.set_bot_paused(False, pause_file)
             self.assertFalse(bot.is_bot_paused(pause_file))
 
+    def test_parse_debug_address_and_launch_debug_chrome(self):
+        self.assertEqual(settings.parse_debug_address(""), ("127.0.0.1", 9222))
+        self.assertEqual(settings.parse_debug_address("127.0.0.1:9333"), ("127.0.0.1", 9333))
+        self.assertEqual(settings.parse_debug_address("invalid"), ("127.0.0.1", 9222))
+
+        with patch.object(settings, "find_chrome_executable", return_value="/fake/chrome"), \
+             patch.object(settings.subprocess, "Popen") as popen_mock:
+            settings.launch_debug_chrome("https://kktix.com", "127.0.0.1:9222", profile_dir="/tmp/prof")
+            popen_mock.assert_called_once_with([
+                "/fake/chrome",
+                "--remote-debugging-port=9222",
+                "--user-data-dir=/tmp/prof",
+                "https://kktix.com",
+            ])
+
+    def test_open_browser_pauses_bot_fills_debug_addr_and_resets_on_homepage_change(self):
+        for url in ("https://kktix.com", "https://tixcraft.com"):
+            combo_hp = MagicMock()
+            combo_br = MagicMock()
+            txt_addr = MagicMock()
+            txt_addr_val = MagicMock()
+            combo_hp.get.return_value = url
+            txt_addr.get.return_value = ""
+            with patch.object(settings, "set_bot_paused") as pause_mock, \
+                 patch.object(settings, "update_pause_ui") as ui_mock, \
+                 patch.object(settings, "btn_save_act", return_value=True) as save_mock, \
+                 patch.object(settings, "launch_debug_chrome") as launch_mock, \
+                 patch.dict(settings.__dict__, {
+                     "combo_homepage": combo_hp,
+                     "combo_browser": combo_br,
+                     "txt_browser_debug_address": txt_addr,
+                     "txt_browser_debug_address_value": txt_addr_val,
+                 }):
+                settings.btn_open_browser_clicked()
+                pause_mock.assert_called_once_with(True)
+                ui_mock.assert_called_once_with(True)
+                combo_br.set.assert_called_once_with("chrome")
+                txt_addr_val.set.assert_called_once_with("127.0.0.1:9222")
+                save_mock.assert_called_once_with(slience_mode=True)
+                launch_mock.assert_called_once_with(url, debug_address="127.0.0.1:9222")
+                txt_addr_val.reset_mock()
+
+                with patch.object(settings, "showHideBlocks") as show_hide_mock:
+                    settings.callbackHomepageOnChange(None)
+                    txt_addr_val.set.assert_called_once_with("")
+                    show_hide_mock.assert_called_once_with()
+
 
 class SeleniumIntegrationTests(unittest.TestCase):
     @classmethod
