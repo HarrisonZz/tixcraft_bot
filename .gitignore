@@ -4,3 +4,4 @@ __pycache__/
 webdriver/
 .bot_paused
 venv/
+.venv/

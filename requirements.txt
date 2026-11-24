@@ -1,3 +1,5 @@
-selenium>=4.10.0
-Pillow>=10.0.0
-ddddocr>=1.5.0
+# Managed via pyproject.toml + uv.lock (`uv sync --locked`).
+# Kept for legacy `pip install -r requirements.txt` compatibility.
+selenium>=4.10.0,<5.0.0
+Pillow>=10.0.0,<14.0.0
+ddddocr>=1.6.0,<2.0.0

@@ -10,38 +10,83 @@ https://max-everyday.com/2018/03/tixcraft-bot/
 # demo
 https://youtu.be/U6xGBofx-O8
 
-# how to execute source code (Python 3 + Selenium 4)
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-2. WebDriver setup:
-- Selenium 4's built-in **Selenium Manager** automatically downloads and manages `chromedriver` / `geckodriver` when no local binary is present.
-- Optional: if you prefer a local driver binary, place `chromedriver` / `chromedriver.exe` (or `geckodriver` / `geckodriver.exe`) inside the `webdriver/` folder.
-3. Launch settings GUI or run directly:
-```bash
-python3 settings.py
-# or run directly using settings.json:
-python3 chrome_tixcraft.py
-```
+# how to execute source code (Python 3.12 + Selenium 4, managed with uv)
+
+> **One-click shortcut**: You can run `.\setup.ps1` (or double-click `setup.bat`) on Windows, or `chmod +x setup.sh && ./setup.sh` on macOS / Linux to automatically perform Steps 1 and 2 below.
+
+1. **Install `uv`** (skip if already installed):
+   - **Windows (PowerShell)**:
+     ```powershell
+     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+     ```
+     *(Restart your terminal after installation, or run `$env:Path = "$HOME\.local\bin;$env:Path"` in the current session.)*
+   - **macOS / Linux**:
+     ```bash
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     ```
+   Verify installation:
+   ```bash
+   uv --version
+   ```
+
+2. **Sync Python 3.12 & locked dependencies** (creates `.venv` from `pyproject.toml` and `uv.lock`; automatically downloads Python 3.12 if missing):
+   ```bash
+   uv sync --locked
+   ```
+
+3. **WebDriver setup**:
+   - Selenium 4's built-in **Selenium Manager** automatically downloads and manages `chromedriver` / `geckodriver` when no local binary is present.
+   - Optional: if you prefer a local driver binary, place `chromedriver` / `chromedriver.exe` (or `geckodriver` / `geckodriver.exe`) inside the `webdriver/` folder.
+
+4. **Launch settings GUI or run directly**:
+   ```bash
+   uv run settings.py
+   # or run directly using settings.json:
+   uv run chrome_tixcraft.py
+   ```
+   *(Legacy fallback without `uv`: `pip install -r requirements.txt` and `python3 settings.py` / `python3 chrome_tixcraft.py`.)*
 
 # attach to an already-open Chrome (skip the Cloudflare loop)
 If the Chrome that the bot launches keeps getting stuck on the Cloudflare challenge, you can open Chrome yourself, log in / pass Cloudflare manually, and then let the bot take over that same window:
 
 1. Quit the bot (and any Chrome it launched).
-2. Start Chrome from a terminal with remote debugging enabled (use a dedicated profile so it does not clash with your normal Chrome):
-   ```bash
-   # macOS
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-     --remote-debugging-port=9222 \
-     --user-data-dir="$HOME/tixcraft-chrome-profile"
-   ```
-   Windows / Linux: launch `chrome.exe` / `google-chrome` with the same
-   `--remote-debugging-port=9222 --user-data-dir=...` flags.
-3. In that Chrome window, open KKTIX (`https://kktix.com`), log in if needed and solve the Cloudflare challenge manually.
+2. Start Chrome from a terminal with remote debugging enabled. **You must pass a dedicated `--user-data-dir`** (modern Chrome refuses to open port `9222` on the default user profile or merges into an existing normal Chrome window):
+   - **Windows (PowerShell, recommended — runs in background)**:
+     ```powershell
+     Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList @(
+       "--remote-debugging-port=9222",
+       "--user-data-dir=$HOME\tixcraft-chrome-profile"
+     )
+     ```
+   - **Windows (CMD)**:
+     ```cmd
+     start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\tixcraft-chrome-profile"
+     ```
+   - **macOS**:
+     ```bash
+     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+       --remote-debugging-port=9222 \
+       --user-data-dir="$HOME/tixcraft-chrome-profile"
+     ```
+   - **Linux**:
+     ```bash
+     google-chrome \
+       --remote-debugging-port=9222 \
+       --user-data-dir="$HOME/tixcraft-chrome-profile"
+     ```
+   - **Verify port `9222` is listening** (should return JSON containing `Browser` and `webSocketDebuggerUrl`):
+     ```powershell
+     # Windows (PowerShell)
+     Invoke-RestMethod http://127.0.0.1:9222/json/version
+     ```
+     ```bash
+     # macOS / Linux
+     curl -s http://127.0.0.1:9222/json/version
+     ```
+3. In that Chrome window, open your target site (e.g. `https://tixcraft.com` or `https://kktix.com`), log in if needed and solve any Cloudflare challenge manually. *(Your login session and cookies are preserved in `tixcraft-chrome-profile` for future runs.)*
 4. Set `browser_debug_address` in `settings.json` to `127.0.0.1:9222` (or fill in the "Attach Chrome (debug addr)" field in `settings.py`), then run:
    ```bash
-   python3 chrome_tixcraft.py
+   uv run chrome_tixcraft.py
    ```
    The bot attaches to the Chrome window you already opened and keeps the page you are on (it only navigates to `homepage` if the tab is blank), so your Cloudflare cookie / login session is preserved.
 
@@ -49,7 +94,7 @@ Leave `browser_debug_address` empty (`""`) to go back to the default behaviour o
 
 # verification / tests
 ```bash
-python3 -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 ```
 
 # scope & notes

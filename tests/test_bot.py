@@ -698,7 +698,7 @@ class SeleniumIntegrationTests(unittest.TestCase):
         cls.thread.start()
 
         bot.load_config()
-        cls.driver = bot.create_driver(browser_name="chrome", headless=True)
+        cls.driver = bot.create_driver(browser_name="chrome", headless=True, debug_address="")
         bot.driver = cls.driver
 
     @classmethod
