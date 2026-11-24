@@ -5,3 +5,5 @@ webdriver/
 .bot_paused
 venv/
 .venv/
+build/
+dist/

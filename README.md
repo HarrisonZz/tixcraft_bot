@@ -99,6 +99,18 @@ Leave `browser_debug_address` empty (`""`) to go back to the default behaviour o
 uv run python -m unittest discover -s tests -v
 ```
 
+# build standalone app (PyInstaller `--onedir`)
+To package the GUI (`settings`) and bot (`chrome_tixcraft`) into a self-contained `dist/tixcraft_bot/` folder that runs on machines without Python or `uv` installed (only Google Chrome is required):
+```powershell
+# Windows (PowerShell)
+.\build.ps1
+```
+```bash
+# macOS / Linux
+chmod +x build.sh && ./build.sh
+```
+Zip and share the generated `dist/tixcraft_bot/` directory; users can launch `settings.exe` (`./settings` on macOS/Linux) directly.
+
 # scope & notes
 - This tool automates page navigation, date/area selection, ticket quantity selection, and agreement controls based on `settings.json`.
 - **KKTIX**: supports automatic navigation from event pages (`/events/...`) to `/registrations/new` using a blocking `driver.get` (so the asynchronously-rendered ticket list is detected reliably), comma-separated priority keywords in `kktix.area_keyword` (case-insensitive and thousands-comma insensitive, e.g. `VIP, $3,800, $2800`), exclude keywords in `kktix.area_exclude_keyword` (e.g. `身障, 輪椅`), hidden-row/hidden-button filtering, `+` button fallback, automatic refresh when tickets are not yet available or filtered out, pausing auto-refresh when `/registrations/new` prompts for login, Next Step duplicate-click cooldown, and auto-pressing **"電腦配位"** (computer seat assignment) over **"自行選位"** (manual seat map) for seated events.

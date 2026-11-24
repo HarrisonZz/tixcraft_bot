@@ -2870,6 +2870,11 @@ def main():
             driver.get(homepage)
     except Exception as exc:
         logger.error("Failed to initialize WebDriver: %s", exc, exc_info=True)
+        if (getattr(sys, "frozen", False) or "__compiled__" in globals()) and sys.stdin and sys.stdin.isatty():
+            try:
+                input("\nPress Enter to close...")
+            except EOFError:
+                pass
         sys.exit(1)
 
     # internal variable. 說明：這是一個內部變數，請略過。

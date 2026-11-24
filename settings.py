@@ -14,6 +14,12 @@ except ImportError:
 
 import os
 import sys
+
+if getattr(sys, "frozen", False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
 import json
 import platform
 import shutil
