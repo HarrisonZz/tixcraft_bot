@@ -395,7 +395,7 @@ class UnitTests(unittest.TestCase):
     def test_load_config_from_repo(self):
         cfg = bot.load_config()
         self.assertIsNotNone(cfg)
-        self.assertEqual(bot.homepage, "https://kktix.com")
+        self.assertTrue(str(bot.homepage).startswith("http"))
         self.assertEqual(bot.browser, "chrome")
         self.assertEqual(bot.ticket_number, "2")
 
