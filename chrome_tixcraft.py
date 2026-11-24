@@ -70,6 +70,10 @@ config_dict = None
 
 homepage = "https://tixcraft.com"
 browser = "chrome"
+# 說明：設定後會「附加(attach)」到已手動開啟、並開啟了 remote-debugging 的 Chrome，
+#       而不是由程式另外啟動一個新的 Chrome。例："127.0.0.1:9222"。
+#       留空則維持原本行為（由程式啟動 Chrome）。
+browser_debug_address = ""
 ticket_number = "2"
 facebook_account = ""
 
@@ -101,7 +105,7 @@ kktix_answer_dictionary_list = None
 
 def load_config(filepath=None):
     global config_filepath, config_dict
-    global homepage, browser, ticket_number, facebook_account
+    global homepage, browser, browser_debug_address, ticket_number, facebook_account
     global auto_press_next_step_button, auto_fill_ticket_number
     global date_auto_select_enable, date_auto_select_mode, date_keyword
     global area_auto_select_enable, area_auto_select_mode, area_keyword
@@ -129,6 +133,10 @@ def load_config(filepath=None):
         homepage = config_dict["homepage"]
     if 'browser' in config_dict:
         browser = str(config_dict["browser"]).strip().lower()
+
+    browser_debug_address = ""
+    if 'browser_debug_address' in config_dict:
+        browser_debug_address = str(config_dict["browser_debug_address"] or "").strip()
 
     # default ticket number
     # 說明：自動選擇的票數
@@ -228,6 +236,7 @@ def load_config(filepath=None):
     print("version", CONST_APP_VERSION)
     print("homepage", homepage)
     print("browser", browser)
+    print("browser_debug_address", browser_debug_address)
     print("ticket_number", ticket_number)
     print("facebook_account", facebook_account)
 
@@ -252,31 +261,47 @@ def load_config(filepath=None):
     return config_dict
 
 
-def create_driver(browser_name=None, headless=False):
+def create_driver(browser_name=None, headless=False, debug_address=None):
     target_browser = (browser_name or browser or "chrome").strip().lower()
     root_dir = get_app_root()
     is_windows = platform.system() == "Windows"
+
+    # 決定是否要「附加」到已開啟的 Chrome（remote debugging）。
+    attach_address = ""
+    if debug_address is not None:
+        attach_address = str(debug_address).strip()
+    elif browser_debug_address:
+        attach_address = str(browser_debug_address).strip()
 
     if target_browser == "chrome":
         driver_filename = "chromedriver.exe" if is_windows else "chromedriver"
         chromedriver_path = os.path.join(root_dir, "webdriver", driver_filename)
 
         chrome_options = webdriver.ChromeOptions()
-        chrome_options.add_experimental_option("excludeSwitches", ['enable-automation'])
         chrome_options.page_load_strategy = "eager"
         chrome_options.unhandled_prompt_behavior = "ignore"
 
-        if headless:
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
+        if attach_address:
+            # 附加到已手動開啟（並已通過 Cloudflare / 登入）的 Chrome，
+            # 不再由程式啟動新的 Chrome。
+            # 注意：attach 模式下 chromedriver 不接受 excludeSwitches 等 launch-only
+            # 選項（新版 chromedriver 會回 "unrecognized chrome option"），所以這裡
+            # 不加 excludeSwitches。
+            print("Attaching to existing Chrome via remote debugging: %s" % attach_address)
+            chrome_options.add_experimental_option("debuggerAddress", attach_address)
         else:
-            for ext_name in ("AdBlock.crx", "BlockYourselfFromAnalytics.crx"):
-                extension_path = os.path.join(root_dir, "webdriver", ext_name)
-                if os.path.isfile(extension_path):
-                    chrome_options.add_extension(extension_path)
-                else:
-                    print("extension not exist:", extension_path)
+            chrome_options.add_experimental_option("excludeSwitches", ['enable-automation'])
+            if headless:
+                chrome_options.add_argument("--headless=new")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+            else:
+                for ext_name in ("AdBlock.crx", "BlockYourselfFromAnalytics.crx"):
+                    extension_path = os.path.join(root_dir, "webdriver", ext_name)
+                    if os.path.isfile(extension_path):
+                        chrome_options.add_extension(extension_path)
+                    else:
+                        print("extension not exist:", extension_path)
 
         if os.path.isfile(chromedriver_path):
             service = ChromeService(executable_path=chromedriver_path)
@@ -285,6 +310,12 @@ def create_driver(browser_name=None, headless=False):
         return webdriver.Chrome(options=chrome_options)
 
     if target_browser == "firefox":
+        if attach_address:
+            raise ValueError(
+                "browser_debug_address is only supported for 'chrome'; "
+                "firefox attach is not implemented."
+            )
+
         driver_filename = "geckodriver.exe" if is_windows else "geckodriver"
         geckodriver_path = os.path.join(root_dir, "webdriver", driver_filename)
 
@@ -1221,8 +1252,19 @@ def tixcraft_ticket_main(url, is_verifyCode_editing):
 def _parse_keywords(keyword_str):
     if not keyword_str:
         return []
-    parts = re.split(r'[,，;；]+', str(keyword_str))
+    # Split on delimiters (comma/semicolon, ASCII or full-width) while preserving
+    # thousands-separator commas inside numbers such as "$3,800".
+    parts = re.split(r'(?<!\d),|,(?!\d{3}(?:\D|$))|[，;；]+', str(keyword_str))
     return [part.strip() for part in parts if part.strip()]
+
+
+def _normalize_kktix_match_text(text):
+    if not text:
+        return ""
+    # Normalize case and remove thousands-separator commas inside numbers so
+    # "$3800", "$3,800", and "TWD$3,800" all match consistently.
+    normalized = re.sub(r'(?<=\d),(?=\d{3}(?!\d))', '', str(text))
+    return normalized.casefold()
 
 
 def _kktix_parse_positive_int(value):
@@ -1251,32 +1293,40 @@ def kktix_event_redirect(url):
                 if not link.is_displayed() or not link.is_enabled():
                     continue
                 href = link.get_attribute("href")
+                if not href:
+                    continue
+                # Use driver.get() instead of link.click(): the click is async and
+                # the bot may check the ticket list before the registrations page has
+                # finished loading, which made it wrongly report "no available".
                 try:
-                    link.click()
+                    driver.get(href)
                     return True
                 except Exception as exc:
-                    print("click kktix event buy link fail:", exc)
-                    if href:
-                        driver.get(href)
-                        return True
+                    print("navigate kktix registrations fail:", exc)
         except Exception:
             pass
     return False
 
 
 def _kktix_get_row_quantity_input(row):
-    try:
-        inputs = row.find_elements(
-            By.CSS_SELECTOR,
-            'input[type="text"], input[type="number"], input:not([type])',
-        )
-        for inp in inputs:
-            inp_type = (inp.get_attribute("type") or "text").strip().lower()
-            if inp_type in ("hidden", "checkbox", "radio", "submit", "button"):
-                continue
-            return inp
-    except Exception:
-        pass
+    selectors = (
+        '.ticket-quantity input[type="text"], .ticket-quantity input[type="number"], .ticket-quantity input:not([type])',
+        'input[type="text"], input[type="number"], input:not([type])',
+    )
+    for selector in selectors:
+        try:
+            inputs = row.find_elements(By.CSS_SELECTOR, selector)
+            for inp in inputs:
+                inp_type = (inp.get_attribute("type") or "text").strip().lower()
+                if inp_type in ("hidden", "checkbox", "radio", "submit", "button"):
+                    continue
+                if not inp.is_displayed() or not inp.is_enabled():
+                    continue
+                if inp.get_attribute("disabled") is not None:
+                    continue
+                return inp
+        except Exception:
+            pass
     return None
 
 
@@ -1294,19 +1344,13 @@ def _kktix_find_ticket_rows():
     available = []
     for row in rows:
         try:
-            if not row.is_enabled():
+            if not row.is_displayed() or not row.is_enabled():
                 continue
         except Exception:
             continue
 
         qty_input = _kktix_get_row_quantity_input(row)
         if qty_input is None:
-            continue
-
-        try:
-            if not qty_input.is_enabled():
-                continue
-        except Exception:
             continue
 
         available.append((row, qty_input))
@@ -1327,25 +1371,49 @@ def _kktix_set_ticket_quantity(row, qty_input, target_qty):
         candidates.append("1")
 
     for qty_str in candidates:
+        desired = int(qty_str)
         # Strategy A: direct input + input/change events so AngularJS ng-model updates.
         try:
-            qty_input.clear()
-            qty_input.send_keys(qty_str)
-            driver.execute_script(
-                "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
-                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                qty_input,
-            )
-            if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
-                return True
+            if qty_input.get_attribute('readonly') is None:
+                qty_input.clear()
+                qty_input.send_keys(qty_str)
+                driver.execute_script(
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    qty_input,
+                )
+                actual = _kktix_parse_positive_int(qty_input.get_attribute('value'))
+                if actual == desired:
+                    return True
+                # Handle inputs that reset empty string to '0' during clear() (e.g. '20').
+                driver.execute_script(
+                    "arguments[0].value = arguments[1];"
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                    qty_input,
+                    qty_str,
+                )
+                if _kktix_parse_positive_int(qty_input.get_attribute('value')) == desired:
+                    return True
         except Exception as exc:
             print("assign ticket number via input fail:", exc)
 
-        # Strategy B: click plus button if direct typing did not update the value.
+        # Strategy B: click plus button if direct typing is unavailable or did not update the value.
         try:
-            plus_btn = row.find_element(By.CSS_SELECTOR, 'button.plus, .btn-default.plus, .plus')
-            if plus_btn is not None and plus_btn.is_enabled():
-                for _ in range(int(qty_str)):
+            plus_buttons = row.find_elements(By.CSS_SELECTOR, 'button.plus, .btn-default.plus, .plus')
+            plus_btn = next(
+                (
+                    b for b in plus_buttons
+                    if b.is_displayed() and b.is_enabled() and b.get_attribute('disabled') is None
+                ),
+                None,
+            )
+            if plus_btn is not None:
+                for _ in range(desired):
+                    if _kktix_parse_positive_int(qty_input.get_attribute('value')) >= desired:
+                        break
+                    if not plus_btn.is_enabled() or plus_btn.get_attribute('disabled') is not None:
+                        break
                     plus_btn.click()
                 if _kktix_parse_positive_int(qty_input.get_attribute('value')) > 0:
                     return True
@@ -1355,37 +1423,158 @@ def _kktix_set_ticket_quantity(row, qty_input, target_qty):
     return False
 
 
-def kktix_agree_terms():
-    checkbox = None
-    try:
-        checkbox = driver.find_element(By.ID, 'person_agree_terms')
-    except Exception:
-        # Some KKTIX forms do not have a separate terms checkbox.
-        return True
+KKTIX_AGREEMENT_KEYWORDS = (
+    'agree', 'accept', 'terms', 'privacy', 'policy',
+    '同意', '條款', '隱私', '政策',
+)
 
+
+def _kktix_checkbox_context_text(checkbox):
+    texts = []
+    try:
+        texts.append(checkbox.text or "")
+    except Exception:
+        pass
+    try:
+        label = checkbox.find_element(By.XPATH, 'ancestor::label[1]')
+        if label is not None:
+            texts.append(label.text or "")
+    except Exception:
+        pass
+    try:
+        parent = checkbox.find_element(By.XPATH, '..')
+        if parent is not None:
+            texts.append(parent.text or "")
+    except Exception:
+        pass
+    return " ".join(texts)
+
+
+def _kktix_is_agreement_checkbox(checkbox):
+    try:
+        if not checkbox.is_displayed():
+            return False
+    except Exception:
+        return False
+
+    text = _kktix_checkbox_context_text(checkbox)
+    normalized = text.casefold()
+    return any(keyword.casefold() in normalized for keyword in KKTIX_AGREEMENT_KEYWORDS)
+
+
+def _kktix_click_agreement_checkbox(checkbox):
     if checkbox is None:
-        return True
+        return False
 
     try:
         if not checkbox.is_selected():
             checkbox.click()
     except Exception as exc:
-        print("click person_agree_terms fail:", exc)
+        print("click agreement checkbox fail:", exc)
 
     try:
         if not checkbox.is_selected():
             driver.execute_script(
-                'var cb = document.getElementById("person_agree_terms");'
-                'if (cb && !cb.checked) {'
-                '  cb.checked = true;'
-                '  cb.dispatchEvent(new Event("click", {bubbles: true}));'
-                '  cb.dispatchEvent(new Event("change", {bubbles: true}));'
-                '}'
+                "arguments[0].checked = true;"
+                "arguments[0].dispatchEvent(new Event('click', {bubbles: true}));"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+                checkbox,
             )
         return checkbox.is_selected()
     except Exception as exc:
-        print("javascript check person_agree_terms fail:", exc)
+        print("javascript check agreement checkbox fail:", exc)
         return False
+
+
+def kktix_agree_terms():
+    # Part 1: the known KKTIX checkbox id (門票不可退款 / 服務條款 agreement).
+    try:
+        checkbox = driver.find_element(By.ID, 'person_agree_terms')
+        _kktix_click_agreement_checkbox(checkbox)
+    except Exception:
+        # Some KKTIX forms do not have a separate terms checkbox.
+        pass
+
+    # Part 2: KKTIX renders additional agreement controls dynamically, e.g.
+    # "我已經閱讀並同意 服務條款 與 隱私權政策" (checkbox) and
+    # "我同意KKTIX系統所分配之門票..." (radio). Check every visible checkbox/radio
+    # whose label mentions agreement/terms/privacy so all of them are covered.
+    try:
+        controls = driver.find_elements(By.CSS_SELECTOR, 'input[type="checkbox"], input[type="radio"]')
+        for control in controls:
+            if _kktix_is_agreement_checkbox(control):
+                _kktix_click_agreement_checkbox(control)
+    except Exception as exc:
+        print("find agreement checkboxes fail:", exc)
+
+    return True
+
+
+def kktix_registration_form(url, answer_index):
+    """Handle the KKTIX step-2 page (fill registration info / confirm order).
+
+    The URL for this step is ``/registrations/<order_id>`` (not ``/registrations/new``),
+    which the main loop routes here. It auto-checks the agreement controls, waits for
+    the human-verification / CAPTCHA if present, and then auto-presses the
+    "確認表單資料" (confirm) button; the final payment stays manual.
+    """
+    #---------------------------
+    # agree terms / notice (checkbox + radio)
+    #---------------------------
+    kktix_agree_terms()
+
+    #---------------------------
+    # human verification / CAPTCHA check (manual completion)
+    #---------------------------
+    has_verification, custom_input = kktix_has_human_verification()
+    if has_verification:
+        captcha_done = False
+        if custom_input is not None:
+            try:
+                captcha_done = len(custom_input.get_attribute('value') or "") > 0
+                if not captcha_done:
+                    already_focused = custom_input.get_attribute('data-bot-focused') == '1'
+                    if not already_focused:
+                        driver.execute_script(
+                            "arguments[0].setAttribute('data-bot-focused', '1'); arguments[0].focus();",
+                            custom_input,
+                        )
+            except Exception:
+                pass
+        # Pause until the user completes the verification; the next loop pass will
+        # detect the filled code and then press the confirm button.
+        if not captcha_done:
+            return answer_index
+
+    #---------------------------
+    # auto press the confirm button
+    #---------------------------
+    if auto_press_next_step_button:
+        kktix_press_next_button()
+
+    return answer_index
+
+
+def kktix_is_login_required(app_div=None):
+    scope = app_div
+    if scope is None:
+        try:
+            scope = driver.find_element(By.ID, 'registrationsNewApp')
+        except Exception:
+            return False
+
+    try:
+        sign_in_links = scope.find_elements(
+            By.CSS_SELECTOR,
+            'a[href*="/users/sign_in"], a[href*="sign_in"], button[ng-click*="signIn"], button[ng-click*="login"]',
+        )
+        for el in sign_in_links:
+            if el.is_displayed():
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def kktix_has_human_verification():
@@ -1422,39 +1611,110 @@ def kktix_has_human_verification():
     return False, None
 
 
-def kktix_press_next_button():
-    ret = False
+KKTIX_NEXT_BUTTON_SELECTORS = (
+    '#registrationsNewApp div.form-actions button.btn-primary',
+    'div.form-actions button.btn-primary',
+    'button.btn-primary[ng-click*="challenge"]',
+    'button[type="submit"].btn-primary',
+)
+# Seated events (e.g. concerts) show "自行選位" (pick your own seat) and
+# "電腦配位" (let the system assign seats) instead of a plain "下一步".
+# Prefer "電腦配位" because it is the fastest fully-automatic path (no seat map).
+KKTIX_PREFERRED_NEXT_BUTTON_TEXTS = (
+    '電腦配位',
+    '下一步',
+    '確認',
+)
+KKTIX_NEXT_CLICK_COOLDOWN_MS = 1500
 
-    # let javascript to enable button.
-    time.sleep(0.2)
 
-    selectors = (
-        '#registrationsNewApp div.form-actions button.btn-primary',
-        'div.form-actions button.btn-primary',
-        'button.btn-primary[ng-click*="challenge"]',
-        'button[type="submit"].btn-primary',
-    )
+def _is_kktix_next_button_clickable(btn):
+    try:
+        if not btn.is_displayed() or not btn.is_enabled():
+            return False
+        if btn.get_attribute('disabled') is not None:
+            return False
+        cls = (btn.get_attribute('class') or '').split()
+        if 'disabled' in cls or 'ng-hide' in cls:
+            return False
+        return True
+    except Exception:
+        return False
 
-    for selector in selectors:
+
+def _find_clickable_kktix_next_button(drv=None):
+    target_driver = drv or driver
+
+    # First prefer the automated-path buttons (e.g. "電腦配位") by label text.
+    for text in KKTIX_PREFERRED_NEXT_BUTTON_TEXTS:
         try:
-            wait = WebDriverWait(driver, 0.8)
-            next_step_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-            if next_step_button is not None and next_step_button.is_enabled():
-                if not next_step_button.get_attribute('disabled'):
-                    next_step_button.click()
-                    ret = True
-                    break
+            buttons = target_driver.find_elements(By.CSS_SELECTOR, 'button, a.btn, a.btn-primary')
+            for btn in buttons:
+                try:
+                    btn_text = (btn.text or '').strip()
+                except Exception:
+                    continue
+                if text in btn_text and _is_kktix_next_button_clickable(btn):
+                    return btn
+        except Exception:
+            pass
+
+    # Fall back to the generic selectors.
+    for selector in KKTIX_NEXT_BUTTON_SELECTORS:
+        try:
+            buttons = target_driver.find_elements(By.CSS_SELECTOR, selector)
+            for btn in buttons:
+                if _is_kktix_next_button_clickable(btn):
+                    return btn
+        except Exception:
+            pass
+    return False
+
+
+def kktix_press_next_button():
+    # Prevent duplicate clicks while an async Next Step request is already in flight on the same page.
+    try:
+        within_cooldown = driver.execute_script(
+            "var last = window.__kktix_next_clicked_at || 0;"
+            "return last > 0 && (Date.now() - last) < arguments[0];",
+            KKTIX_NEXT_CLICK_COOLDOWN_MS,
+        )
+        if within_cooldown:
+            return False
+    except Exception:
+        pass
+
+    next_step_button = None
+    try:
+        wait = WebDriverWait(driver, 0.8, poll_frequency=0.05)
+        next_step_button = wait.until(_find_clickable_kktix_next_button)
+    except Exception:
+        next_step_button = _find_clickable_kktix_next_button(driver) or None
+
+    if not next_step_button:
+        return False
+
+    try:
+        driver.execute_script("window.__kktix_next_clicked_at = Date.now();")
+    except Exception:
+        pass
+
+    try:
+        next_step_button.click()
+        return True
+    except Exception:
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();",
+                next_step_button,
+            )
+            return True
         except Exception:
             try:
-                next_step_button = driver.find_element(By.CSS_SELECTOR, selector)
-                if next_step_button is not None and next_step_button.is_displayed() and next_step_button.is_enabled():
-                    if not next_step_button.get_attribute('disabled'):
-                        next_step_button.click()
-                        ret = True
-                        break
+                driver.execute_script("window.__kktix_next_clicked_at = 0;")
             except Exception:
                 pass
-    return ret
+            return False
 
 
 def kktix_captcha_text_value(captcha_inner_div):
@@ -1507,8 +1767,8 @@ def kktix_assign_ticket_number():
         except Exception:
             pass
 
-    exclude_keywords = _parse_keywords(kktix_area_exclude_keyword)
-    include_keywords = _parse_keywords(kktix_area_keyword)
+    exclude_keywords = [_normalize_kktix_match_text(kw) for kw in _parse_keywords(kktix_area_exclude_keyword)]
+    include_keywords = [_normalize_kktix_match_text(kw) for kw in _parse_keywords(kktix_area_keyword)]
 
     filtered_rows = []
     for row, qty_input in available_rows:
@@ -1518,9 +1778,10 @@ def kktix_assign_ticket_number():
         except Exception:
             continue
 
-        if any(ex_kw in row_text for ex_kw in exclude_keywords):
+        norm_row_text = _normalize_kktix_match_text(row_text)
+        if any(ex_kw in norm_row_text for ex_kw in exclude_keywords):
             continue
-        filtered_rows.append((row, qty_input, row_text))
+        filtered_rows.append((row, qty_input, norm_row_text))
 
     if not filtered_rows:
         return False
@@ -1531,7 +1792,7 @@ def kktix_assign_ticket_number():
     else:
         # Match keywords in priority order; pick the first tier that has available tickets.
         for kw in include_keywords:
-            tier = [(row, qty_input) for row, qty_input, row_text in filtered_rows if kw in row_text]
+            tier = [(row, qty_input) for row, qty_input, norm_row_text in filtered_rows if kw in norm_row_text]
             if tier:
                 candidates = tier
                 break
@@ -1553,15 +1814,36 @@ def kktix_reg_new(url, answer_index):
     #---------------------------
     available_rows = _kktix_find_ticket_rows()
     if not available_rows:
+        # The KKTIX ticket list is rendered asynchronously by AngularJS after the
+        # page navigates (for example after clicking "立即購票" on the event page).
+        # Wait briefly for the quantity inputs to appear before giving up and
+        # refreshing, otherwise the bot can miss tickets that are actually on sale.
+        try:
+            WebDriverWait(driver, 3, poll_frequency=0.2).until(
+                lambda drv: len(_kktix_find_ticket_rows()) > 0
+            )
+            available_rows = _kktix_find_ticket_rows()
+        except TimeoutException:
+            available_rows = []
+
+    if not available_rows:
+        # Best-effort login check (only applies to older KKTIX layouts that have
+        # the #registrationsNewApp container).
         try:
             app_div = driver.find_element(By.ID, 'registrationsNewApp')
-            if app_div is not None:
-                print("no available KKTIX ticket inputs yet, refreshing...")
-                time.sleep(0.3)
-                driver.refresh()
-                return -1
+            if app_div is not None and kktix_is_login_required(app_div):
+                _date_diag("KKTIX requires login on /registrations/new; pausing auto-refresh for manual sign-in.")
+                return answer_index
         except Exception:
-            return -1
+            pass
+
+        print("no available KKTIX ticket inputs yet, refreshing...")
+        try:
+            time.sleep(0.5)
+            driver.refresh()
+        except Exception:
+            pass
+        return -1
 
     #---------------------------
     # part 2: agree terms checkbox
@@ -1579,9 +1861,13 @@ def kktix_reg_new(url, answer_index):
                 break
             time.sleep(0.1)
 
-        # When area keyword(s) are set and none match yet, refresh to wait for release.
-        if not is_assign_ticket_number and len(_parse_keywords(kktix_area_keyword)) > 0:
-            print("(with keyword) no matching KKTIX ticket available, refreshing...")
+        # When area include/exclude filter(s) are set and none match yet, refresh to wait for release.
+        has_area_filter = (
+            len(_parse_keywords(kktix_area_keyword)) > 0
+            or len(_parse_keywords(kktix_area_exclude_keyword)) > 0
+        )
+        if not is_assign_ticket_number and has_area_filter:
+            print("(with area filter) no matching KKTIX ticket available, refreshing...")
             try:
                 time.sleep(0.3)
                 driver.refresh()
@@ -1606,8 +1892,12 @@ def kktix_reg_new(url, answer_index):
         if custom_input is not None:
             try:
                 current_val = custom_input.get_attribute('value') or ""
-                if len(current_val) == 0:
-                    driver.execute_script("arguments[0].focus();", custom_input)
+                already_focused = custom_input.get_attribute('data-bot-focused') == '1'
+                if len(current_val) == 0 and not already_focused:
+                    driver.execute_script(
+                        "arguments[0].setAttribute('data-bot-focused', '1'); arguments[0].focus();",
+                        custom_input,
+                    )
             except Exception:
                 pass
         # Pause auto-submit so the user can complete verification manually in the browser.
@@ -2484,6 +2774,12 @@ def _is_driver_closed_error(exc):
     return any(marker in msg for marker in closed_markers)
 
 
+def _is_blank_page(current_url):
+    if current_url is None:
+        return True
+    return str(current_url).strip().lower() in ("", "about:blank", "data:,")
+
+
 def get_pause_file_path():
     return os.path.join(get_app_root(), '.bot_paused')
 
@@ -2558,7 +2854,20 @@ def main():
 
     try:
         driver = create_driver(browser)
-        driver.get(homepage)
+        if browser_debug_address:
+            # 附加到已開啟的 Chrome：保留使用者已手動開好（含登入/已通過 Cloudflare）的頁面，
+            # 只有當目前是空白頁時才去開啟 homepage。
+            print("Attached to existing browser at %s" % browser_debug_address)
+            open_homepage = True
+            try:
+                if not _is_blank_page(driver.current_url):
+                    open_homepage = False
+            except Exception:
+                pass
+            if open_homepage:
+                driver.get(homepage)
+        else:
+            driver.get(homepage)
     except Exception as exc:
         logger.error("Failed to initialize WebDriver: %s", exc, exc_info=True)
         sys.exit(1)
@@ -2722,6 +3031,10 @@ def main():
             if 'kktix.c' in url:
                 if '/registrations/new' in url:
                     answer_index = kktix_reg_new(url, answer_index)
+                elif '/registrations/' in url:
+                    # Step-2 page (fill registration info / confirm order). URL is
+                    # /registrations/<order_id>; auto-check agreement controls.
+                    answer_index = kktix_registration_form(url, answer_index)
                 else:
                     answer_index = -1
                     if '/events/' in url and '/registrations' not in url:

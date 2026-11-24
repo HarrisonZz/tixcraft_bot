@@ -318,6 +318,61 @@ class MockTicketingHandler(http.server.BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/events/kktix-comma-hidden/registrations/new":
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div class="ticket-unit display-table-row" style="display:none;">
+                      <span>VIP 隱藏票 TWD$3,800</span>
+                      <input id="qty_hidden" type="text" value="0" />
+                    </div>
+                    <div class="ticket-unit display-table-row">
+                      <span>VIP 搖滾區 TWD$3,800</span>
+                      <input id="qty_visible" type="text" value="0" />
+                    </div>
+                    <input type="checkbox" id="person_agree_terms" />
+                    <div class="form-actions">
+                      <button id="btn_hidden" class="btn-primary" style="display:none;" disabled>自行選位</button>
+                      <button id="btn_visible" class="btn-primary" onclick="window._clicks=(window._clicks||0)+1; document.body.setAttribute('data-next','visible_clicked');">電腦配位</button>
+                    </div>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/kktix-only-excluded/registrations/new":
+            MockTicketingHandler.refresh_hits += 1
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div class="ticket-unit display-table-row">
+                      <span>身障票 TWD$1,800</span>
+                      <input id="qty_ex" type="text" value="0" />
+                    </div>
+                    <input type="checkbox" id="person_agree_terms" />
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
+        if path == "/events/kktix-login-required/registrations/new":
+            MockTicketingHandler.refresh_hits += 1
+            self._send_html(
+                """
+                <html><body>
+                  <div id="registrationsNewApp">
+                    <div class="alert">請先登入 KKTIX 帳號以購票</div>
+                    <a class="btn btn-primary" href="/users/sign_in">登入</a>
+                  </div>
+                </body></html>
+                """
+            )
+            return
+
         if path == "/cf-challenge":
             self._send_html(
                 """
@@ -340,13 +395,29 @@ class UnitTests(unittest.TestCase):
     def test_load_config_from_repo(self):
         cfg = bot.load_config()
         self.assertIsNotNone(cfg)
-        self.assertEqual(bot.homepage, "https://tixcraft.com")
+        self.assertEqual(bot.homepage, "https://kktix.com")
         self.assertEqual(bot.browser, "chrome")
         self.assertEqual(bot.ticket_number, "2")
 
     def test_load_config_missing_file(self):
         cfg = bot.load_config("/nonexistent/settings.json")
         self.assertIsNone(cfg)
+
+    def test_load_config_reads_debug_address(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "settings.json")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "homepage": "https://kktix.com",
+                        "browser": "chrome",
+                        "browser_debug_address": "127.0.0.1:9222",
+                        "ticket_number": 2,
+                    },
+                    f,
+                )
+            bot.load_config(cfg_path)
+            self.assertEqual(bot.browser_debug_address, "127.0.0.1:9222")
 
     def test_settings_load_json_defaults(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -385,6 +456,187 @@ class UnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bot.create_driver("safari")
 
+    def test_create_driver_attaches_to_debug_address(self):
+        options = MagicMock()
+        chrome_mock = MagicMock()
+        with patch.object(bot.webdriver, "ChromeOptions", return_value=options), \
+             patch.object(bot.webdriver, "Chrome", return_value=chrome_mock):
+            driver = bot.create_driver("chrome", debug_address="127.0.0.1:9222")
+            options.add_experimental_option.assert_any_call(
+                "debuggerAddress", "127.0.0.1:9222"
+            )
+            # excludeSwitches is launch-only and must NOT be sent in attach mode.
+            passed_options = [
+                call.args[0] for call in options.add_experimental_option.call_args_list
+            ]
+            self.assertNotIn("excludeSwitches", passed_options)
+            self.assertEqual(driver, chrome_mock)
+
+    def test_firefox_attach_raises(self):
+        with self.assertRaises(ValueError):
+            bot.create_driver("firefox", debug_address="127.0.0.1:9222")
+
+    def test_is_blank_page(self):
+        self.assertTrue(bot._is_blank_page(None))
+        self.assertTrue(bot._is_blank_page(""))
+        self.assertTrue(bot._is_blank_page("about:blank"))
+        self.assertTrue(bot._is_blank_page("data:,"))
+        self.assertFalse(bot._is_blank_page("https://kktix.com"))
+
+    def _make_mock_checkbox(self, text, displayed=True, selected=False):
+        checkbox = MagicMock()
+        checkbox.text = text
+        checkbox.is_displayed.return_value = displayed
+        checkbox.is_selected.return_value = selected
+
+        label = MagicMock()
+        label.text = text
+        parent = MagicMock()
+        parent.text = text
+
+        def find_element(by, value):
+            if value == 'ancestor::label[1]':
+                return label
+            return parent
+
+        checkbox.find_element.side_effect = find_element
+        return checkbox
+
+    def test_kktix_is_agreement_checkbox(self):
+        self.assertTrue(bot._kktix_is_agreement_checkbox(
+            self._make_mock_checkbox("我同意KKTIX系統所分配之門票，購買後將不能更改或退款。")
+        ))
+        self.assertTrue(bot._kktix_is_agreement_checkbox(
+            self._make_mock_checkbox("我已經閱讀並同意 服務條款 與 隱私權政策。")
+        ))
+        self.assertFalse(bot._kktix_is_agreement_checkbox(
+            self._make_mock_checkbox("訂閱電子報")
+        ))
+        self.assertFalse(bot._kktix_is_agreement_checkbox(
+            self._make_mock_checkbox("我同意", displayed=False)
+        ))
+
+    def test_kktix_agree_terms_checks_all_agreement_checkboxes(self):
+        agree = self._make_mock_checkbox("我同意KKTIX系統所分配之門票，購買後將不能更改或退款。")
+        privacy = self._make_mock_checkbox("我已經閱讀並同意 服務條款 與 隱私權政策。")
+
+        driver_mock = MagicMock()
+        driver_mock.find_element.return_value = agree
+        driver_mock.find_elements.return_value = [agree, privacy]
+
+        with patch.object(bot, "driver", driver_mock):
+            bot.kktix_agree_terms()
+
+        self.assertTrue(agree.click.called)
+        self.assertTrue(privacy.click.called)
+
+    def test_kktix_agree_terms_checks_agreement_radio(self):
+        # The "我同意KKTIX系統所分配之門票..." control is rendered as a radio.
+        radio = self._make_mock_checkbox("我同意KKTIX系統所分配之門票，購買後將不能更改或退款。")
+
+        driver_mock = MagicMock()
+        driver_mock.find_element.side_effect = Exception("no person_agree_terms")
+        driver_mock.find_elements.return_value = [radio]
+
+        with patch.object(bot, "driver", driver_mock):
+            bot.kktix_agree_terms()
+
+        self.assertTrue(radio.click.called)
+
+    def test_kktix_registration_form_checks_agreement_and_confirms(self):
+        agree = self._make_mock_checkbox("我同意KKTIX系統所分配之門票，購買後將不能更改或退款。")
+
+        driver_mock = MagicMock()
+        driver_mock.find_element.return_value = agree
+        driver_mock.find_elements.return_value = [agree]
+
+        with patch.object(bot, "driver", driver_mock), \
+             patch.object(bot, "kktix_has_human_verification", return_value=(False, None)), \
+             patch.object(bot, "auto_press_next_step_button", True), \
+             patch.object(bot, "kktix_press_next_button") as mock_press:
+            result = bot.kktix_registration_form(
+                "https://kktix.com/events/x/registrations/123", -1
+            )
+
+        self.assertEqual(result, -1)
+        self.assertTrue(agree.click.called)
+        mock_press.assert_called_once()
+
+    def test_kktix_registration_form_waits_for_captcha(self):
+        agree = self._make_mock_checkbox("我同意KKTIX系統所分配之門票，購買後將不能更改或退款。")
+        captcha_input = MagicMock()
+        captcha_input.get_attribute.return_value = ""  # empty -> not filled yet
+
+        driver_mock = MagicMock()
+        driver_mock.find_element.return_value = agree
+        driver_mock.find_elements.return_value = [agree]
+
+        with patch.object(bot, "driver", driver_mock), \
+             patch.object(bot, "kktix_has_human_verification", return_value=(True, captcha_input)), \
+             patch.object(bot, "auto_press_next_step_button", True), \
+             patch.object(bot, "kktix_press_next_button") as mock_press:
+            result = bot.kktix_registration_form(
+                "https://kktix.com/events/x/registrations/123", -1
+            )
+
+        self.assertEqual(result, -1)
+        self.assertTrue(agree.click.called)
+        mock_press.assert_not_called()
+
+    def _make_mock_button(self, text, displayed=True, enabled=True, disabled=False, cls="btn btn-primary"):
+        btn = MagicMock()
+        btn.text = text
+        btn.is_displayed.return_value = displayed
+        btn.is_enabled.return_value = enabled
+
+        def get_attribute(attr):
+            if attr == "disabled":
+                return "disabled" if disabled else None
+            if attr == "class":
+                return cls
+            return None
+
+        btn.get_attribute.side_effect = get_attribute
+        return btn
+
+    def test_find_next_button_prefers_computer_seat_assignment(self):
+        manual = self._make_mock_button("自行選位")
+        computer = self._make_mock_button("電腦配位")
+
+        driver_mock = MagicMock()
+        driver_mock.find_elements.return_value = [manual, computer]
+
+        result = bot._find_clickable_kktix_next_button(driver_mock)
+        self.assertEqual(result, computer)
+
+    def test_find_next_button_falls_back_to_next_step(self):
+        next_btn = self._make_mock_button("下一步")
+        driver_mock = MagicMock()
+        driver_mock.find_elements.return_value = [next_btn]
+
+        result = bot._find_clickable_kktix_next_button(driver_mock)
+        self.assertEqual(result, next_btn)
+
+    def test_kktix_event_redirect_uses_driver_get(self):
+        link = MagicMock()
+        link.is_displayed.return_value = True
+        link.is_enabled.return_value = True
+        link.get_attribute.return_value = "https://kktix.com/events/x/registrations/new"
+
+        driver_mock = MagicMock()
+        driver_mock.find_elements.return_value = [link]
+
+        with patch.object(bot, "driver", driver_mock):
+            result = bot.kktix_event_redirect(
+                "https://mugenlive.kktix.cc/events/kanho-yakushiji-10th-2026-hk"
+            )
+
+        self.assertTrue(result)
+        driver_mock.get.assert_called_once_with(
+            "https://kktix.com/events/x/registrations/new"
+        )
+        link.click.assert_not_called()
+
     def test_tixcraft_press_confirm_button_text_fallback(self):
         fake_button = MagicMock()
         fake_button.text = "確認張數"
@@ -401,6 +653,19 @@ class UnitTests(unittest.TestCase):
     def test_parse_keywords(self):
         self.assertEqual(bot._parse_keywords(""), [])
         self.assertEqual(bot._parse_keywords("VIP, $3800， $2800; A區"), ["VIP", "$3800", "$2800", "A區"])
+        self.assertEqual(bot._parse_keywords("VIP, $3,800, $2,800"), ["VIP", "$3,800", "$2,800"])
+        self.assertEqual(bot._parse_keywords("$3,800,$2,800"), ["$3,800", "$2,800"])
+
+    def test_normalize_kktix_match_text(self):
+        self.assertEqual(bot._normalize_kktix_match_text("VIP 搖滾區 TWD$3,800"), "vip 搖滾區 twd$3800")
+        self.assertIn(
+            bot._normalize_kktix_match_text("$3800"),
+            bot._normalize_kktix_match_text("VIP 搖滾區 TWD$3,800"),
+        )
+        self.assertIn(
+            bot._normalize_kktix_match_text("$3,800"),
+            bot._normalize_kktix_match_text("VIP 搖滾區 TWD$3800"),
+        )
 
     def test_pause_resume_state_shared_between_settings_and_bot(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -638,6 +903,75 @@ class SeleniumIntegrationTests(unittest.TestCase):
         self.assertIsNone(
             self.driver.execute_script("return document.body.getAttribute('data-next');")
         )
+
+        # Subsequent loop ticks must not steal focus back if user focuses another input.
+        self.driver.execute_script('document.getElementById("qty_verify").focus();')
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertEqual(
+            self.driver.execute_script("return document.activeElement.id;"),
+            "qty_verify",
+        )
+
+    def test_kktix_comma_price_hidden_row_hidden_next_and_cooldown(self):
+        bot.ticket_number = "2"
+        bot.auto_fill_ticket_number = True
+        bot.auto_press_next_step_button = True
+        bot.kktix_area_auto_select_mode = bot.CONST_FROM_TOP_TO_BOTTOM
+        bot.kktix_area_keyword = "$3800"
+        bot.kktix_area_exclude_keyword = ""
+
+        self.driver.get(f"{self.base_url}/events/kktix-comma-hidden/registrations/new")
+        bot.kktix_reg_new(self.driver.current_url, -1)
+
+        self.assertEqual(
+            self.driver.execute_script('return document.getElementById("qty_visible").value;'),
+            "2",
+        )
+        self.assertEqual(
+            self.driver.execute_script("return document.body.getAttribute('data-next');"),
+            "visible_clicked",
+        )
+        self.assertEqual(
+            self.driver.execute_script("return window._clicks;"),
+            1,
+        )
+
+        # Immediate second tick while still on /registrations/new must respect click cooldown.
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertEqual(
+            self.driver.execute_script("return window._clicks;"),
+            1,
+        )
+
+        # Case-insensitive keyword ("vip") also matches "VIP 搖滾區 TWD$3,800".
+        bot.kktix_area_keyword = "vip"
+        self.driver.get(f"{self.base_url}/events/kktix-comma-hidden/registrations/new")
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertEqual(
+            self.driver.execute_script('return document.getElementById("qty_visible").value;'),
+            "2",
+        )
+
+    def test_kktix_exclude_only_refreshes_when_only_excluded_available(self):
+        MockTicketingHandler.refresh_hits = 0
+        bot.auto_fill_ticket_number = True
+        bot.kktix_area_keyword = ""
+        bot.kktix_area_exclude_keyword = "身障, 輪椅"
+
+        self.driver.get(f"{self.base_url}/events/kktix-only-excluded/registrations/new")
+        hits_before = MockTicketingHandler.refresh_hits
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertGreater(MockTicketingHandler.refresh_hits, hits_before)
+
+    def test_kktix_login_required_pauses_auto_refresh(self):
+        MockTicketingHandler.refresh_hits = 0
+        bot.kktix_area_keyword = ""
+        bot.kktix_area_exclude_keyword = ""
+
+        self.driver.get(f"{self.base_url}/events/kktix-login-required/registrations/new")
+        hits_before = MockTicketingHandler.refresh_hits
+        bot.kktix_reg_new(self.driver.current_url, -1)
+        self.assertEqual(MockTicketingHandler.refresh_hits, hits_before)
 
     def test_cloudflare_challenge_detection(self):
         self.driver.get(f"{self.base_url}/cf-challenge")

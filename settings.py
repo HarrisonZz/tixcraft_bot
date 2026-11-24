@@ -48,6 +48,7 @@ def get_default_config():
     return {
         "homepage": "https://tixcraft.com",
         "browser": "chrome",
+        "browser_debug_address": "",
         "ticket_number": 2,
         "facebook_account": "",
         "tixcraft": {
@@ -113,6 +114,7 @@ def btn_save_act(slience_mode=False):
         global combo_homepage
         global combo_browser
         global txt_ticket_number
+        global txt_browser_debug_address
         #global txt_facebook_account
 
         global chk_state_auto_press_next_step_button
@@ -148,6 +150,9 @@ def btn_save_act(slience_mode=False):
                 messagebox.showerror("Error", "Please enter browser: chrome or firefox")
             else:
                 config_dict["browser"] = combo_browser.get().strip()
+
+        if is_all_data_correct:
+            config_dict["browser_debug_address"] = txt_browser_debug_address.get().strip()
 
         if is_all_data_correct:
             ticket_num_str = txt_ticket_number.get().strip()
@@ -430,6 +435,7 @@ def MainMenu(root):
 
     homepage = None
     browser = None
+    browser_debug_address = ""
     ticket_number = 1
 
     auto_press_next_step_button = None
@@ -462,6 +468,10 @@ def MainMenu(root):
 
         if u'browser' in config_dict:
             browser = config_dict["browser"]
+
+        browser_debug_address = ""
+        if 'browser_debug_address' in config_dict:
+            browser_debug_address = str(config_dict["browser_debug_address"] or "")
 
         # default ticket number
         # 說明：自動選擇的票數
@@ -542,6 +552,7 @@ def MainMenu(root):
         print("auto_fill_ticket_number", auto_fill_ticket_number)
         print("kktix_area_mode", kktix_area_mode)
         print("kktix_area_keyword", kktix_area_keyword)
+        print("kktix_area_exclude_keyword", kktix_area_exclude_keyword)
         print("kktix_answer_dictionary", kktix_answer_dictionary)
 
         # for tixcraft
@@ -591,6 +602,17 @@ def MainMenu(root):
     #combo_browser.current(0)
     combo_browser.set(browser)
     combo_browser.grid(column=1, row=group_row_count, sticky = W)
+
+    group_row_count+=1
+
+    lbl_browser_debug_address = Label(frame_group_header, text="Attach Chrome (debug addr)")
+    lbl_browser_debug_address.grid(column=0, row=group_row_count, sticky = E)
+
+    global txt_browser_debug_address
+    global txt_browser_debug_address_value
+    txt_browser_debug_address_value = StringVar(frame_group_header, value=browser_debug_address)
+    txt_browser_debug_address = Entry(frame_group_header, width=24, textvariable = txt_browser_debug_address_value)
+    txt_browser_debug_address.grid(column=1, row=group_row_count, sticky = W)
 
     group_row_count+=1
 

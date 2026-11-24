@@ -1,8 +1,9 @@
 {
-  "homepage": "https://tixcraft.com",
+  "homepage": "https://kktix.com",
   "homepage1": "https://kktix.com",
   "homepage2": "https://tixcraft.com",
   "browser": "chrome",
+  "browser_debug_address": "127.0.0.1:9222",
   "browser1": "chrome",
   "browser2": "firefox",
   "ticket_number": 2,
